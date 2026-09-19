@@ -40,6 +40,7 @@ from fabulexa_forge.errors import (
 )
 from fabulexa_forge.exporters.dimensional.validation import (
     check_date_parse_source_column,
+    check_date_ref_window_bound_on_scd2,
     check_decimal_source_column,
     check_discriminator_value_observed,
     check_excluded_kind_not_sourced,
@@ -532,6 +533,20 @@ def test_date_ref_parse_shape_no_anchor_passes() -> None:
     check_temporal_render_requires_anchor(col, None)  # must not raise
 
 
+def test_date_ref_bound_shape_requires_anchor_raises() -> None:
+    """A `date_ref` bound shape is always an explicit `date` election — no
+    anchor is refused, naming the column."""
+    col = ColumnDecl(name="valid_to_key", date_ref=DateRefSpec(scd_window="valid_to"))
+    with pytest.raises(TemporalRenderRequiresAnchor, match="valid_to_key"):
+        check_temporal_render_requires_anchor(col, None)
+
+
+def test_date_ref_bound_shape_with_anchor_passes() -> None:
+    """A `date_ref` bound shape with a resolved anchor never raises."""
+    col = ColumnDecl(name="valid_to_key", date_ref=DateRefSpec(scd_window="valid_to"))
+    check_temporal_render_requires_anchor(col, MagicMock())  # must not raise
+
+
 # ---------------------------------------------------------------------------
 # date_ref — TimestampSourceAvailable / ProjectionColumnExists /
 # DateParseSourceColumn (instant shape reads TimestampSourceAvailable's
@@ -624,6 +639,122 @@ def test_date_ref_parse_from_non_varchar_raises() -> None:
     with pytest.raises(DateParseSourceColumn, match="epoch_date_key") as exc_info:
         check_date_parse_source_column(col, tbl, "records__actor", sidecar)
     assert "BIGINT" in str(exc_info.value)
+
+
+def test_timestamp_source_available_passes_for_bound_shape(tmp_path: Path) -> None:
+    """check_timestamp_source_available is a no-op for a bound-shape
+    `date_ref` column — it reads no `.source`."""
+    emit_dir = build_test_emit(tmp_path)
+    with open_emit(emit_dir) as emit:
+        col = ColumnDecl(
+            name="valid_to_key", date_ref=DateRefSpec(scd_window="valid_to")
+        )
+        tbl = _make_table_decl(columns=[col], key=["valid_to_key"])
+        from fabulexa_forge.exporters.dimensional.validation import (
+            _grain_projectable_surface,
+            _resolve_source_table_name,
+        )
+
+        src_name = _resolve_source_table_name(tbl.source)
+        surface = _grain_projectable_surface(tbl.source, emit.sidecar, src_name)
+        check_timestamp_source_available(
+            col, tbl, tbl.source, surface
+        )  # must not raise
+
+
+def test_date_parse_source_column_passes_for_bound_shape() -> None:
+    """check_date_parse_source_column is a no-op for a bound-shape `date_ref`
+    column — it reads no `.from_`."""
+    sidecar = _date_parse_sidecar([identity_column("record_id", "VARCHAR")])
+    col = ColumnDecl(name="valid_to_key", date_ref=DateRefSpec(scd_window="valid_to"))
+    tbl = _make_table_decl(kind="actor", columns=[col], key=["valid_to_key"])
+    check_date_parse_source_column(
+        col, tbl, "records__actor", sidecar
+    )  # must not raise
+
+
+# ---------------------------------------------------------------------------
+# DateRefWindowBoundRequiresScd2
+# ---------------------------------------------------------------------------
+
+
+def test_date_ref_window_bound_valid_from_passes_on_type2() -> None:
+    """A bound-shape `date_ref` `valid_from` key passes
+    DateRefWindowBoundRequiresScd2 on an `scd: type2` table."""
+    tbl = _make_scd2_table_decl()
+    col = ColumnDecl(
+        name="valid_from_key", date_ref=DateRefSpec(scd_window="valid_from")
+    )
+    check_date_ref_window_bound_on_scd2(col, tbl)  # must not raise
+
+
+def test_date_ref_window_bound_valid_to_passes_on_type2() -> None:
+    """A bound-shape `date_ref` `valid_to` key passes
+    DateRefWindowBoundRequiresScd2 on an `scd: type2` table."""
+    tbl = _make_scd2_table_decl()
+    col = ColumnDecl(name="valid_to_key", date_ref=DateRefSpec(scd_window="valid_to"))
+    check_date_ref_window_bound_on_scd2(col, tbl)  # must not raise
+
+
+def test_date_ref_window_bound_refused_on_type1_dim() -> None:
+    """A bound-shape `date_ref` key on a `scd: type1` dim refuses, naming
+    the column, table, and bound."""
+    col = ColumnDecl(
+        name="valid_from_key", date_ref=DateRefSpec(scd_window="valid_from")
+    )
+    tbl = _make_table_decl(columns=[col], key=["valid_from_key"])
+    with pytest.raises(
+        ExportError,
+        match=(
+            "column 'valid_from_key' on table 't': date_ref scd_window:"
+            " valid_from addresses the SCD-2 version window, and the table"
+            " is not scd: type2"
+        ),
+    ):
+        check_date_ref_window_bound_on_scd2(col, tbl)
+
+
+def test_date_ref_window_bound_refused_on_fact() -> None:
+    """A bound-shape `date_ref` key on a fact table refuses — facts carry
+    no SCD class at all."""
+    col = ColumnDecl(name="valid_to_key", date_ref=DateRefSpec(scd_window="valid_to"))
+    tbl = TableDecl(
+        name="fact_visits",
+        role="fact",
+        source=SourceDecl(grain="records", kind="entity"),
+        key=["valid_to_key"],
+        columns=[col],
+    )
+    with pytest.raises(
+        ExportError,
+        match=(
+            "column 'valid_to_key' on table 'fact_visits': date_ref"
+            " scd_window: valid_to addresses the SCD-2 version window, and"
+            " the table is not scd: type2"
+        ),
+    ):
+        check_date_ref_window_bound_on_scd2(col, tbl)
+
+
+def test_date_ref_window_bound_instant_shape_passes_on_any_table() -> None:
+    """An instant-shape `date_ref` column is a no-op for this rule — passes
+    on a `scd: type1` dim."""
+    col = ColumnDecl(
+        name="event_date_key", date_ref=DateRefSpec(source="created_sim_time")
+    )
+    tbl = _make_table_decl(columns=[col], key=["event_date_key"])
+    check_date_ref_window_bound_on_scd2(col, tbl)  # must not raise
+
+
+def test_date_ref_window_bound_parse_shape_passes_on_any_table() -> None:
+    """A parse-shape `date_ref` column is a no-op for this rule — passes on
+    a `scd: type1` dim."""
+    col = ColumnDecl(
+        name="birth_date_key",
+        date_ref=DateRefSpec(**{"from": "prop__dob"}, format="%Y-%m-%d"),
+    )
+    tbl = _make_table_decl(columns=[col], key=["birth_date_key"])
+    check_date_ref_window_bound_on_scd2(col, tbl)  # must not raise
 
 
 # ---------------------------------------------------------------------------
@@ -1091,6 +1222,14 @@ def test_scd2_column_mode_supported_message_lists_date_ref() -> None:
         check_scd2_column_mode_supported(col, tbl)
 
 
+def test_scd2_column_mode_supported_admits_date_ref_bound_shape() -> None:
+    """Scd2ColumnModeSupported admits a bound-shape `date_ref` column — no
+    raise."""
+    col = ColumnDecl(name="valid_to_key", date_ref=DateRefSpec(scd_window="valid_to"))
+    tbl = _scd2_derived_validate_table_decl(col)
+    check_scd2_column_mode_supported(col, tbl)  # must not raise
+
+
 def test_validate_table_type2_derived_date_parse_tracked_source_passes() -> None:
     """A derived: date_parse over a tracked prop__ source passes
     validate_table on a type2 table — tracked sources render per version;
@@ -1271,6 +1410,50 @@ def test_validate_table_passes(tmp_path: Path) -> None:
         config = DimensionalConfig(tables=[tbl])
         src_name = validate_table(tbl, config, emit.sidecar, discard_notice_sink)
     assert src_name == "records__entity"
+
+
+# ---------------------------------------------------------------------------
+# validate_table: rule ordering pin — DateRefWindowBoundRequiresScd2 ahead of
+# TemporalRenderRequiresAnchor
+# ---------------------------------------------------------------------------
+
+
+def test_validate_table_bound_shape_on_type1_raises_window_bound_rule_not_anchor() -> (
+    None
+):
+    """validate_table's ordering pin: DateRefWindowBoundRequiresScd2 runs
+    ahead of TemporalRenderRequiresAnchor — a bound-shape key on a type1
+    dim with no anchor raises the window-bound rule's message, not the
+    anchor rule's."""
+    sidecar = _scd2_derived_source_sidecar()
+    col = ColumnDecl(name="valid_to_key", date_ref=DateRefSpec(scd_window="valid_to"))
+    tbl = _make_table_decl(kind="actor", columns=[col], key=["valid_to_key"])
+    config = DimensionalConfig(tables=[tbl])
+    with pytest.raises(ExportError, match="is not scd: type2"):
+        validate_table(tbl, config, sidecar, discard_notice_sink, anchor=None)
+
+
+def test_validate_table_bound_shape_on_type2_with_anchor_passes() -> None:
+    """A bound-shape `date_ref` key on a type2 dim, with a resolved anchor,
+    passes validate_table end-to-end."""
+    sidecar = _scd2_derived_source_sidecar()
+    col = ColumnDecl(name="valid_to_key", date_ref=DateRefSpec(scd_window="valid_to"))
+    tbl = _scd2_derived_validate_table_decl(col)
+    config = DimensionalConfig(tables=[tbl])
+    validate_table(
+        tbl, config, sidecar, discard_notice_sink, anchor=MagicMock()
+    )  # must not raise
+
+
+def test_validate_table_bound_shape_on_type2_no_anchor_raises_anchor_rule() -> None:
+    """A bound-shape `date_ref` key on a type2 dim passes the window-bound
+    rule — with no anchor, TemporalRenderRequiresAnchor fires next."""
+    sidecar = _scd2_derived_source_sidecar()
+    col = ColumnDecl(name="valid_to_key", date_ref=DateRefSpec(scd_window="valid_to"))
+    tbl = _scd2_derived_validate_table_decl(col)
+    config = DimensionalConfig(tables=[tbl])
+    with pytest.raises(TemporalRenderRequiresAnchor, match="valid_to_key"):
+        validate_table(tbl, config, sidecar, discard_notice_sink, anchor=None)
 
 
 # ---------------------------------------------------------------------------
@@ -1593,6 +1776,31 @@ def test_date_ref_parse_from_refuses_slice_only() -> None:
     with pytest.raises(ExportError) as exc_info:
         check_slice_only_column_reads(col, tbl, tbl.source, "records__actor", sidecar)
     _assert_slice_only_message(str(exc_info.value))
+
+
+def test_collect_value_read_sources_bound_shape_returns_empty() -> None:
+    """A bound-shape `date_ref` column reads no base column —
+    `_collect_value_read_sources` returns an empty list."""
+    from fabulexa_forge.exporters.dimensional.validation import (
+        _collect_value_read_sources,
+    )
+
+    col = ColumnDecl(name="valid_to_key", date_ref=DateRefSpec(scd_window="valid_to"))
+    assert _collect_value_read_sources(col) == []
+
+
+def test_slice_only_column_reads_passes_for_bound_shape_on_all_slice_only_kind() -> (
+    None
+):
+    """check_slice_only_column_reads passes for a bound-shape `date_ref`
+    column even when every `prop__` column on the kind is slice_only — the
+    collector contributes nothing for it to classify."""
+    sidecar = _slice_only_actor_sidecar()
+    col = ColumnDecl(name="valid_to_key", date_ref=DateRefSpec(scd_window="valid_to"))
+    tbl = _make_table_decl(kind="actor", columns=[col], key=["valid_to_key"])
+    check_slice_only_column_reads(
+        col, tbl, tbl.source, "records__actor", sidecar
+    )  # must not raise
 
 
 # ---------------------------------------------------------------------------

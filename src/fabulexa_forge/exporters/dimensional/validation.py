@@ -373,6 +373,40 @@ def check_timestamp_source_available(
     )
 
 
+def check_date_ref_window_bound_on_scd2(
+    col_decl: "ColumnDecl",
+    table_decl: "TableDecl",
+) -> None:
+    """Enforce DateRefWindowBoundRequiresScd2: a bound-shape `date_ref`
+    declares on an `scd: type2` table.
+
+    Always-on, full export included; a pure function of the declaration.
+    The version window the shape addresses exists only on a versioned dim.
+    Run by `validate_table`'s per-column loop ahead of
+    `check_temporal_render_requires_anchor` (§ Validation Rules — rule
+    ordering).
+
+    Args:
+        col_decl: The column declaration.
+        table_decl: The output table declaration.
+
+    Raises:
+        ExportError: `col_decl.date_ref.scd_window` is set and
+            `table_decl.scd != "type2"`. Message: "column '{name}' on table
+            '{table}': date_ref scd_window: {bound} addresses the SCD-2
+            version window, and the table is not scd: type2".
+    """
+    if col_decl.date_ref is None or col_decl.date_ref.scd_window is None:
+        return
+    if table_decl.scd == "type2":
+        return
+    raise ExportError(
+        f"column '{col_decl.name}' on table '{table_decl.name}': date_ref"
+        f" scd_window: {col_decl.date_ref.scd_window} addresses the SCD-2"
+        " version window, and the table is not scd: type2"
+    )
+
+
 def check_temporal_render_requires_anchor(
     col_decl: "ColumnDecl",
     anchor: "EffectiveAnchor | None",
@@ -382,10 +416,10 @@ def check_temporal_render_requires_anchor(
     Covers `derived: timestamp` with `as` set (the mode-definitional default
     `timestamp` rendering, absence detection, is exempt), the `scd_window`
     object form (always an explicit election — the object form exists to
-    elect), and a `date_ref` instant shape (always an explicit `date`
-    election). `elapsed: interval`, `date_parse`, and a `date_ref` parse
-    shape are exempt: a duration is a physical delta and a parse reads no
-    sim_time (§ Anchor requirement).
+    elect), and a `date_ref` instant or bound shape (each always an explicit
+    `date` election). `elapsed: interval`, `date_parse`, and a `date_ref`
+    parse shape are exempt: a duration is a physical delta and a parse reads
+    no sim_time (§ Anchor requirement).
 
     Args:
         col_decl: The column declaration.
@@ -399,7 +433,9 @@ def check_temporal_render_requires_anchor(
         return
 
     render: str | None = None
-    if col_decl.date_ref is not None and col_decl.date_ref.source is not None:
+    if col_decl.date_ref is not None and (
+        col_decl.date_ref.source is not None or col_decl.date_ref.scd_window is not None
+    ):
         render = "date"
     elif col_decl.derived is not None:
         derived = col_decl.derived
@@ -760,7 +796,9 @@ def _collect_value_read_sources(col_decl: "ColumnDecl") -> list[str]:
     surface (lookup and fk hops are checked separately). Each derived
     source is a value-read like any other: it joins this surface list, so
     deriving from a slice_only column is refused at plan time (§ The
-    declared date parse).
+    declared date parse). A bound-shape `date_ref` contributes no name — it
+    reads no base column — so `check_slice_only_column_reads` sees nothing
+    to classify for it.
 
     Args:
         col_decl: The column declaration.
@@ -791,7 +829,9 @@ def _collect_value_read_sources(col_decl: "ColumnDecl") -> list[str]:
         if derived.json_precision is not None:
             refs.append(derived.json_precision.from_)
     if col_decl.date_ref is not None:
-        refs.append(resolve_date_ref_source(col_decl.date_ref))
+        date_ref_source = resolve_date_ref_source(col_decl.date_ref)
+        if date_ref_source is not None:
+            refs.append(date_ref_source)
     return refs
 
 
@@ -1115,8 +1155,10 @@ def validate_table(
     Runs: SourceTableExists, ExcludedKindNotSourced, ExcludedTableNotSourced,
     KeyColumnsDeclared, ProjectionColumnExists (reads a `date_ref` parse
     shape's `from_`), OrdinalRefsSiblings, TimestampSourceAvailable (reads a
-    `date_ref` instant shape's `source`), TemporalRenderRequiresAnchor
-    (reads a `date_ref` instant shape's election), DateParseSourceColumn
+    `date_ref` instant shape's `source`), DateRefWindowBoundRequiresScd2
+    (a bound-shape `date_ref` declares on an `scd: type2` table — run ahead
+    of TemporalRenderRequiresAnchor), TemporalRenderRequiresAnchor
+    (reads a `date_ref` instant or bound shape's election), DateParseSourceColumn
     (reads a `date_ref` parse shape's `from_`), DecimalSourceIsDouble,
     JsonPrecisionSourceIsVarchar, DiscriminatorValueObserved, FkTargetIsDim,
     ReferencePathResolvable, MembershipEdgeResolvable, Scd2NeedsHistory,
@@ -1212,6 +1254,7 @@ def validate_table(
         check_projection_column_exists(col_decl, table_decl, surface)
         check_ordinal_refs_siblings(col_decl, table_decl)
         check_timestamp_source_available(col_decl, table_decl, source, surface)
+        check_date_ref_window_bound_on_scd2(col_decl, table_decl)
         check_temporal_render_requires_anchor(col_decl, anchor)
         check_date_parse_source_column(col_decl, table_decl, source_table_name, sidecar)
         check_decimal_source_column(col_decl, table_decl, source_table_name, sidecar)

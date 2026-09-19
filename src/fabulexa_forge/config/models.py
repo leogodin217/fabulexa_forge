@@ -528,7 +528,7 @@ class DateParseSpec(StrictBaseModel):
 
 
 class DateRefSpec(StrictBaseModel):
-    """A `yyyymmdd` key into `dim_date`, from an instant or a parsed date string."""
+    """A `yyyymmdd` key into `dim_date`, from an instant, a parsed date string, or an SCD-2 version-window bound."""  # noqa: E501
 
     source: str | None = None
     """Instant shape: the sim_time source column, rendered to its local
@@ -538,11 +538,17 @@ class DateRefSpec(StrictBaseModel):
     format: str | None = None
     """Parse shape: the declared parse format (closed strptime-directive set,
     see validate_date_parse_format); must be date-complete. Present iff `from_`."""
+    scd_window: Literal["valid_from", "valid_to"] | None = None
+    """Bound shape: the SCD-2 version-window bound, rendered to its local
+    date in the anchor zone — exactly `derived: scd_window: {bound, as: date}`.
+    Bare literal only: the `date` election is implied. Legal only on an
+    `scd: type2` table (business rule DateRefWindowBoundRequiresScd2)."""
 
     @model_validator(mode="after")
     def exactly_one_shape(self) -> Self:
-        """Exactly one of `source` / `from_` is set; `format` iff `from_`;
-        a set `source` / `from_` is non-empty; `format` denotes a date.
+        """Exactly one of `source` / `from_` / `scd_window` is set; `format`
+        iff `from_`; a set `source` / `from_` is non-empty; `format` denotes
+        a date.
 
         Date-completeness is read through the one denotation authority:
         `validate_date_parse_format(format, "date_ref.format")` then
@@ -550,17 +556,21 @@ class DateRefSpec(StrictBaseModel):
         `TIME` denotation (time-only format) is refused.
 
         Raises:
-            ValueError: Neither or both shapes set; `format` without `from_`
-                or `from_` without `format`; an empty column name; a
-                `format` that is not date-complete (time-only) or that
-                fails the declared-parse directive rules.
+            ValueError: Zero or more than one shape set (message: "date_ref:
+                set exactly one of 'source' / 'from' / 'scd_window'" followed
+                by the three values); `format` without `from_` or `from_`
+                without `format`; an empty column name; a `format` that is
+                not date-complete (time-only) or that fails the
+                declared-parse directive rules.
         """
         source_set = self.source is not None
         from_set = self.from_ is not None
-        if source_set == from_set:
+        scd_window_set = self.scd_window is not None
+        if sum((source_set, from_set, scd_window_set)) != 1:
             raise ValueError(
-                "date_ref: set exactly one of 'source' / 'from'"
-                f" (got source={self.source!r}, from={self.from_!r})"
+                "date_ref: set exactly one of 'source' / 'from' / 'scd_window'"
+                f" (got source={self.source!r}, from={self.from_!r},"
+                f" scd_window={self.scd_window!r})"
             )
         if from_set != (self.format is not None):
             raise ValueError(

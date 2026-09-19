@@ -115,8 +115,14 @@ def _channel_variance(
 
     A `date_ref` column's channel is its source's — `date_ref.source` or
     `date_ref.from_` — classified through `_source_variance` exactly as
-    `derived: timestamp` `source` / `date_parse.from` are. This is the ONE
-    per-column variance reading; `window_delivery_class` and
+    `derived: timestamp` `source` / `date_parse.from` are. A bound-shape
+    `date_ref` answers from its own branch, evaluated before any
+    source-column lookup and mirroring the `derived: scd_window` branch:
+    `valid_from` -> None (invariant); `valid_to` -> "is the SCD-2 valid_to
+    bound, closed by the next version". The branch is load-bearing: the
+    reading's fall-through for a column with no source is "invariant",
+    which would misclassify `valid_to`. This is the ONE per-column
+    variance reading; `window_delivery_class` and
     `check_key_columns_stable` change behaviour through it with no edit of
     their own.
     """
@@ -150,6 +156,10 @@ def _channel_variance(
                 source_table_name,
             )
     if col_decl.date_ref is not None:
+        if col_decl.date_ref.scd_window is not None:
+            if col_decl.date_ref.scd_window == "valid_to":
+                return "is the SCD-2 valid_to bound, closed by the next version"
+            return None
         source = resolve_date_ref_source(col_decl.date_ref)
     if source is not None:
         return _source_variance(
