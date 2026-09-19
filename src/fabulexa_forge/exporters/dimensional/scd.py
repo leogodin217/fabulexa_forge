@@ -13,7 +13,7 @@ Tracked/static split rules:
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 from fabulexa_forge.anchor import render_anchor_temporal_expr
 from fabulexa_forge.config.models import scd_window_bound, scd_window_render
@@ -41,6 +41,16 @@ if TYPE_CHECKING:
 _VERSIONS_ALIAS = "_versions"
 # Alias for the reader records-relation subquery (static columns).
 _RECORDS_ALIAS = "_records"
+
+
+def _version_bound_column(bound: Literal["valid_from", "valid_to"] | None) -> str:
+    """The versioned-intervals column backing an SCD-2 bound.
+
+    Shared by the `derived: scd_window` and bound-shape `date_ref` branches
+    of `build_scd2_column_expr_flag`, which both read version boundaries
+    off the same versioned-intervals subquery.
+    """
+    return "version_start" if bound == "valid_from" else "version_end"
 
 
 def build_scd2_column_expr_flag(
@@ -122,7 +132,7 @@ def build_scd2_column_expr_flag(
     if col_decl.derived is not None and col_decl.derived.scd_window is not None:
         bound = scd_window_bound(col_decl.derived.scd_window)
         render = scd_window_render(col_decl.derived.scd_window)
-        col_name = "version_start" if bound == "valid_from" else "version_end"
+        col_name = _version_bound_column(bound)
         qualified_source = f'"{version_alias}"."{col_name}"'
         return render_anchor_temporal_expr(
             anchor, qualified_source, col_decl.name, render
@@ -133,7 +143,7 @@ def build_scd2_column_expr_flag(
 
     if col_decl.date_ref is not None and col_decl.date_ref.scd_window is not None:
         bound = col_decl.date_ref.scd_window
-        col_name = "version_start" if bound == "valid_from" else "version_end"
+        col_name = _version_bound_column(bound)
         qualified_source = f'"{version_alias}"."{col_name}"'
         return render_date_ref_expr(
             col_decl.date_ref, qualified_source, col_decl.name, table_label, anchor

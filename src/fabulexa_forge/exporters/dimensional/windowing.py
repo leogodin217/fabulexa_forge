@@ -63,6 +63,13 @@ _GRAIN_TIME_KEY: dict[str, str] = {
 #: horizons (an interval end that closes later; a trail that advances).
 _VARYING_SURFACE_COLUMNS: frozenset[str] = frozenset({"lead_sim_time", "left_sim_time"})
 
+#: Variance reading shared by the `derived: scd_window` and bound-shape
+#: `date_ref` `valid_to` branches of `_channel_variance` — both name the
+#: same SCD-2 mechanism.
+_SCD_WINDOW_VALID_TO_VARIANCE = (
+    "is the SCD-2 valid_to bound, closed by the next version"
+)
+
 
 def _source_variance(
     name: str,
@@ -142,7 +149,7 @@ def _channel_variance(
             source = derived.timestamp.source
         elif derived.scd_window is not None:
             if scd_window_bound(derived.scd_window) == "valid_to":
-                return "is the SCD-2 valid_to bound, closed by the next version"
+                return _SCD_WINDOW_VALID_TO_VARIANCE
             return None
         elif derived.elapsed is not None:
             return "derived: elapsed — the counterpart row may land later"
@@ -158,7 +165,7 @@ def _channel_variance(
     if col_decl.date_ref is not None:
         if col_decl.date_ref.scd_window is not None:
             if col_decl.date_ref.scd_window == "valid_to":
-                return "is the SCD-2 valid_to bound, closed by the next version"
+                return _SCD_WINDOW_VALID_TO_VARIANCE
             return None
         source = resolve_date_ref_source(col_decl.date_ref)
     if source is not None:
