@@ -41,6 +41,7 @@ def _report(table_name: str = "patients") -> ExportReport:
                 supplement=None,
                 calendar=None,
                 references={},
+                window_bounds={},
             ),
         )
     )

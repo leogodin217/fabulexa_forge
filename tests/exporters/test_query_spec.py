@@ -271,3 +271,50 @@ def test_write_query_specs_forwards_empty_maps_by_default(tmp_path: Path) -> Non
     assert table.event_log is False
     assert table.calendar is None
     assert table.references == {}
+    assert table.window_bounds == {}
+
+
+_WINDOW_BOUNDS = {"valid_from_key": "valid_from", "valid_to_key": "valid_to"}
+
+
+def test_write_query_specs_duckdb_arm_forwards_window_bounds_verbatim(
+    tmp_path: Path,
+) -> None:
+    """`write_query_specs` forwards a spec's `window_bounds` onto the
+    matching `TableReport` unchanged, under the DuckDB arm."""
+    emit_dir = build_test_emit(tmp_path)
+    out_path = tmp_path / "out.duckdb"
+
+    spec = QuerySpec(
+        table_name="dim_entity",
+        sql='SELECT record_id FROM "records__entity" ORDER BY record_id',
+        write_mode="create",
+        window_bounds=_WINDOW_BOUNDS,
+    )
+
+    with open_emit(emit_dir) as emit:
+        report = write_query_specs(emit, [spec], out_path, "duckdb")
+
+    assert report.tables[0].window_bounds == _WINDOW_BOUNDS
+
+
+def test_write_query_specs_csv_arm_forwards_window_bounds_verbatim(
+    tmp_path: Path,
+) -> None:
+    """`write_query_specs` forwards a spec's `window_bounds` onto the
+    matching `TableReport` unchanged, under the CSV arm."""
+    emit_dir = build_test_emit(tmp_path)
+    out_dir = tmp_path / "csv_out"
+    out_dir.mkdir()
+
+    spec = QuerySpec(
+        table_name="dim_entity",
+        sql='SELECT record_id FROM "records__entity" ORDER BY record_id',
+        write_mode="create",
+        window_bounds=_WINDOW_BOUNDS,
+    )
+
+    with open_emit(emit_dir) as emit:
+        report = write_query_specs(emit, [spec], out_dir, "csv")
+
+    assert report.tables[0].window_bounds == _WINDOW_BOUNDS

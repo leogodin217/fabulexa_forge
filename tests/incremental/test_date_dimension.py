@@ -17,6 +17,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+import duckdb
 import pytest
 from _support.notices import discard_notice_sink
 from _support.slice_emit import slice_emit
@@ -28,7 +29,9 @@ from fabulexa_forge.config.models import (
     ColumnDecl,
     DateDimensionConfig,
     DateRefSpec,
+    DerivedSpec,
     DimensionalConfig,
+    ExportConfig,
     IncrementalConfig,
     SourceDecl,
     SupplementDecl,
@@ -39,6 +42,7 @@ from fabulexa_forge.errors import (
     IncrementalFingerprintMismatch,
     SupplementSourceIsOutput,
 )
+from fabulexa_forge.exporters.dimensional.engine import export_dimensional
 from fabulexa_forge.exporters.dimensional.windowing import window_delivery_class
 from fabulexa_forge.exporters.supplements import load_supplements
 from fabulexa_forge.incremental.driver import export_incremental_next, export_window
@@ -47,7 +51,6 @@ from fabulexa_forge.reader.emit import open_emit
 
 if TYPE_CHECKING:
     from fabulexa_forge.anchor import EffectiveAnchor
-    from fabulexa_forge.config.models import ExportConfig
 
 _RECIPE_CONFIG_PATH = (
     Path(__file__).parent.parent.parent
@@ -173,7 +176,13 @@ def test_dim_date_after_declared_tables_before_supplements(tmp_path: Path) -> No
     assert outcome.status == "emitted"
     assert outcome.report is not None
     names = [table.name for table in outcome.report.tables]
-    assert names == ["fact_status_event", "dim_patient", "dim_date", "rate_tier"]
+    assert names == [
+        "fact_status_event",
+        "dim_patient",
+        "dim_patient_status",
+        "dim_date",
+        "rate_tier",
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -341,3 +350,131 @@ def test_fact_without_date_ref_keyed_on_created_sim_time_is_append(
     config = DimensionalConfig(tables=[table_decl])
     with open_emit(emit_dir) as emit:
         assert window_delivery_class(table_decl, config, emit.sidecar) == "append"
+
+
+# ---------------------------------------------------------------------------
+# Bound-shape date_ref: window_bounds forwarding + delivery class through
+# export_window / export_incremental_next
+# ---------------------------------------------------------------------------
+
+
+def _dim_patient_status_append_decl() -> TableDecl:
+    """A type-2 dim declaring only the `valid_from` bound key (and no
+    `valid_to` of either form) -- every value channel is horizon-invariant,
+    so `window_delivery_class` classifies it `append`; the sibling of the
+    recipe's own `dim_patient_status`, which carries both bounds and so
+    classifies `upsert`."""
+    return TableDecl(
+        name="dim_patient_status_append",
+        role="dim",
+        scd="type2",
+        source=SourceDecl(grain="records", kind="patient"),
+        key=["patient_id", "valid_from"],
+        columns=[
+            ColumnDecl(name="patient_id", **{"from": "record_id"}),
+            ColumnDecl(name="status", **{"from": "prop__status"}),
+            ColumnDecl(name="valid_from", derived=DerivedSpec(scd_window="valid_from")),
+            ColumnDecl(
+                name="valid_from_date_key",
+                date_ref=DateRefSpec(scd_window="valid_from"),
+            ),
+        ],
+    )
+
+
+def _status_window_config(
+    *, incremental: IncrementalConfig | None = None
+) -> ExportConfig:
+    """The recipe's own config, plus the `append`-classified sibling dim
+    (`_dim_patient_status_append_decl`) beside its `dim_patient_status`."""
+    config = _recipe_config()
+    assert config.dimensional is not None
+    update: dict[str, object] = {
+        "dimensional": DimensionalConfig(
+            tables=[*config.dimensional.tables, _dim_patient_status_append_decl()]
+        )
+    }
+    if incremental is not None:
+        update["incremental"] = incremental
+    return config.model_copy(update=update)
+
+
+def test_windowed_window_bounds_equals_full_export(tmp_path: Path) -> None:
+    """A windowed compile's `TableReport.window_bounds` equals the full
+    export's, per table -- over the recipe's own `dim_patient_status`."""
+    emit_dir = _sliced_recipe_emit(tmp_path)
+    anchor = _anchor_for(emit_dir)
+    config = _status_window_config()
+
+    with open_emit(emit_dir) as emit:
+        full_report = export_dimensional(
+            emit,
+            config,
+            tmp_path / "full.duckdb",
+            "duckdb",
+            anchor,
+            discard_notice_sink,
+            None,
+            (),
+        )
+        window = parse_range("2024-01-01", "2024-01-10", anchor)
+        windowed = export_window(
+            emit,
+            config,
+            tmp_path / "window.duckdb",
+            "duckdb",
+            anchor,
+            window,
+            None,
+            discard_notice_sink,
+            None,
+            (),
+        )
+
+    full_by_name = {table.name: table for table in full_report.tables}
+    for table in windowed.report.tables:
+        assert table.window_bounds == full_by_name[table.name].window_bounds
+    assert full_by_name["dim_patient_status"].window_bounds == {
+        "valid_from_date_key": "valid_from",
+        "valid_to_date_key": "valid_to",
+    }
+    assert full_by_name["dim_patient_status_append"].window_bounds == {
+        "valid_from_date_key": "valid_from"
+    }
+
+
+def test_bound_key_dim_upserts_valid_to_append_dim_never_revises(
+    tmp_path: Path,
+) -> None:
+    """Driven through `export_incremental_next` day cadence: the recipe's
+    `dim_patient_status` (both bounds) delivers `upsert` -- an earlier
+    version's row is revised in place, closing its `valid_to`, so p001 ends
+    with exactly one row per version and no stale open `valid_to`; the
+    sibling dim declaring only `valid_from` delivers `append` -- the same
+    version count, each row inserted once."""
+    emit_dir = _sliced_recipe_emit(tmp_path)
+    anchor = _anchor_for(emit_dir)
+    config = _status_window_config(incremental=IncrementalConfig(period="day"))
+    out = tmp_path / "warehouse.duckdb"
+
+    with open_emit(emit_dir) as emit:
+        for _ in range(4):
+            outcome = export_incremental_next(
+                emit, config, out, "duckdb", anchor, discard_notice_sink, None, ()
+            )
+            assert outcome.status == "emitted"
+
+    conn = duckdb.connect(str(out), read_only=True)
+    upsert_valid_to_keys = conn.execute(
+        'SELECT valid_to_date_key FROM "dim_patient_status" WHERE patient_id = ?'
+        " ORDER BY valid_from_date_key",
+        ["p001"],
+    ).fetchall()
+    (append_row_count,) = conn.execute(
+        'SELECT COUNT(*) FROM "dim_patient_status_append" WHERE patient_id = ?',
+        ["p001"],
+    ).fetchone()
+    conn.close()
+
+    assert [key for (key,) in upsert_valid_to_keys] == [20240103, 20240104, None]
+    assert append_row_count == 3

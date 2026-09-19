@@ -808,6 +808,92 @@ def test_table_with_no_fk_or_date_ref_has_empty_references(tmp_path: Path) -> No
     assert specs["dim_actor"].references == {}
 
 
+# ---------------------------------------------------------------------------
+# QuerySpec.window_bounds: bound-shape date_ref -> its bound, declaration order
+# ---------------------------------------------------------------------------
+
+
+def test_window_bounds_stamps_bound_shape_date_ref_in_declaration_order(
+    tmp_path: Path,
+) -> None:
+    """`QuerySpec.window_bounds` maps each bound-shape `date_ref` column to
+    its bound, in declaration order; every key is also a `references` key
+    mapped to `dim_date`."""
+    emit_dir = _build_provenance_emit(tmp_path)
+    table_decl = TableDecl(
+        name="dim_actor_scd",
+        role="dim",
+        scd="type2",
+        source=SourceDecl(grain="records", kind="actor"),
+        key=["id", "valid_from"],
+        columns=[
+            ColumnDecl(name="id", **{"from": "record_id"}),
+            ColumnDecl(name="valid_from", derived=DerivedSpec(scd_window="valid_from")),
+            ColumnDecl(
+                name="valid_from_key", date_ref=DateRefSpec(scd_window="valid_from")
+            ),
+            ColumnDecl(
+                name="valid_to_key", date_ref=DateRefSpec(scd_window="valid_to")
+            ),
+        ],
+    )
+    with open_emit(emit_dir) as emit:
+        specs = _compile_specs(emit, _build_config(table_decl), anchor=_ANCHOR)
+
+    spec = specs["dim_actor_scd"]
+    assert list(spec.window_bounds.items()) == [
+        ("valid_from_key", "valid_from"),
+        ("valid_to_key", "valid_to"),
+    ]
+    assert spec.window_bounds.keys() <= spec.references.keys()
+    assert all(spec.references[key] == "dim_date" for key in spec.window_bounds)
+
+
+def test_table_with_no_bound_shape_date_ref_has_empty_window_bounds(
+    tmp_path: Path,
+) -> None:
+    """A table declaring no bound-shape `date_ref` stamps `window_bounds={}`."""
+    emit_dir = _build_provenance_emit(tmp_path)
+    with open_emit(emit_dir) as emit:
+        specs = _compile_specs(emit, _build_config(_dim_actor_table_decl()))
+
+    assert specs["dim_actor"].window_bounds == {}
+
+
+def test_base_mode_spec_has_empty_window_bounds(tmp_path: Path) -> None:
+    """A non-dimensional (base) compiled QuerySpec's `window_bounds` stays
+    empty -- only the dimensional engine stamps it."""
+    emit_dir = build_base_test_emit(tmp_path)
+    with open_emit(emit_dir) as emit:
+        specs = build_base_query_specs(
+            emit,
+            ExportConfig(mode="base"),
+            None,
+            None,
+            notice_sink=discard_notice_sink,
+        )
+
+    assert all(spec.window_bounds == {} for spec in specs)
+
+
+def test_source_mode_spec_has_empty_window_bounds(tmp_path: Path) -> None:
+    """A non-dimensional (source) compiled QuerySpec's `window_bounds` stays
+    empty."""
+    emit_dir = build_source_test_emit(tmp_path)
+    config = ExportConfig(
+        mode="source",
+        source=SourceConfig(tables=(SourceTableDecl(name="visit", kind="visit"),)),
+    )
+    with open_emit(emit_dir) as emit:
+        anchor = resolve_effective_anchor(emit.sidecar.runtime(), None, None, None)
+        assert anchor is not None
+        election = resolve_election(emit.sidecar, config.keys)
+        plan = build_source_plan(emit, config, anchor, election, discard_notice_sink)
+        specs = build_source_query_specs(plan)
+
+    assert all(spec.window_bounds == {} for spec in specs)
+
+
 def test_base_mode_spec_has_empty_references(tmp_path: Path) -> None:
     """A non-dimensional (base) compiled QuerySpec's `references` stays
     empty -- only the dimensional engine stamps `references`."""

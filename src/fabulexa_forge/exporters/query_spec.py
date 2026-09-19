@@ -118,14 +118,17 @@ class TableReport:
     declared `TableKeys`, or None when nothing was declared or the
     declaration was CSV-dropped. `provenance`, `kind_values`,
     `author_descriptions`, `author_table_description`, `event_log`,
-    `supplement`, `calendar`, and `references` are forwarded verbatim from
-    the compiled `QuerySpec` that produced this table — no default, so every
-    report-assembly call site states them explicitly. `supplement` is set
-    iff this table is a supplement, None for a mode table. `calendar` is set
-    iff this table is the generated `dim_date`. `references` maps each
-    output column that points at another output table (a `date_ref` column
-    to `dim_date`, an `fk` column to its resolved dim) to that table's name;
-    empty when the table references nothing.
+    `supplement`, `calendar`, `references`, and `window_bounds` are forwarded
+    verbatim from the compiled `QuerySpec` that produced this table — no
+    default, so every report-assembly call site states them explicitly.
+    `supplement` is set iff this table is a supplement, None for a mode
+    table. `calendar` is set iff this table is the generated `dim_date`.
+    `references` maps each output column that points at another output
+    table (a `date_ref` column to `dim_date`, an `fk` column to its resolved
+    dim) to that table's name; empty when the table references nothing.
+    `window_bounds` maps each bound-shape `date_ref` output column to the
+    bound it addresses; every key is also a `references` key mapped to
+    `dim_date`.
     """
 
     name: str
@@ -140,6 +143,7 @@ class TableReport:
     supplement: "SupplementSource | None"
     calendar: "CalendarSource | None"
     references: "Mapping[str, str]"
+    window_bounds: "Mapping[str, Literal['valid_from', 'valid_to']]"
 
 
 @dataclass(frozen=True)
@@ -180,6 +184,11 @@ class QuerySpec:
     compile (dimensional only; every other mode leaves it empty) and
     forwarded to `TableReport` the same way. `calendar` is set iff this
     spec is the generated `dim_date`; forwarded to `TableReport` by both
+    report-assembly sites. `window_bounds` maps each bound-shape `date_ref`
+    output column to the bound it addresses. Stamped at dimensional plan
+    compile beside `references`, in declaration order
+    (`_table_window_bounds`); every other mode and the calendar / supplement
+    compilers leave it empty. Forwarded to `TableReport` by both
     report-assembly sites.
     """
 
@@ -198,6 +207,9 @@ class QuerySpec:
     supplement: "SupplementSource | None" = None
     references: "Mapping[str, str]" = field(default_factory=dict)
     calendar: "CalendarSource | None" = None
+    window_bounds: "Mapping[str, Literal['valid_from', 'valid_to']]" = field(
+        default_factory=dict
+    )
 
 
 NOTICE_KEYS_NOT_DECLARABLE_CSV = "keys-not-declarable-csv"
@@ -302,6 +314,7 @@ def write_query_specs(
                     supplement=spec.supplement,
                     calendar=spec.calendar,
                     references=spec.references,
+                    window_bounds=spec.window_bounds,
                 )
                 for spec in specs
             )
@@ -326,6 +339,7 @@ def write_query_specs(
                 supplement=spec.supplement,
                 calendar=spec.calendar,
                 references=spec.references,
+                window_bounds=spec.window_bounds,
             )
         )
     return ExportReport(tables=tuple(tables))

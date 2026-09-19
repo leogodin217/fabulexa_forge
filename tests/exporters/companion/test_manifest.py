@@ -63,6 +63,7 @@ def _two_table_report(*, row_count: int | None) -> ExportReport:
                 supplement=None,
                 calendar=None,
                 references={},
+                window_bounds={},
             ),
             TableReport(
                 name="visits",
@@ -77,6 +78,7 @@ def _two_table_report(*, row_count: int | None) -> ExportReport:
                 supplement=None,
                 calendar=None,
                 references={},
+                window_bounds={},
             ),
         )
     )
@@ -439,6 +441,7 @@ def test_override_on_computed_column_with_no_provenance_renders_description_only
                         supplement=None,
                         calendar=None,
                         references={},
+                        window_bounds={},
                     ),
                 )
             ),
@@ -481,6 +484,7 @@ def test_table_spanning_multiple_source_tables_forwards_no_description(
                     supplement=None,
                     calendar=None,
                     references={},
+                    window_bounds={},
                 ),
             )
         )

@@ -65,3 +65,24 @@ tables:
       - id: p002
         birth_date: 1985-11-02
         birth_date_key: 19851102
+
+  dim_patient_status:
+    columns:
+      [patient_id, status, valid_from, valid_from_date_key, valid_to, valid_to_date_key]
+    row_count: 4
+    contains_rows:
+      # p001 pending: valid_from 2024-01-02, closed by the next version.
+      - patient_id: p001
+        status: pending
+        valid_from_date_key: 20240102
+        valid_to_date_key: 20240103
+      # p001 discharged: valid_from 2024-01-04, the open (current) version.
+      - patient_id: p001
+        status: discharged
+        valid_from_date_key: 20240104
+        valid_to_date_key: null
+      # p002 pending: valid_from 2024-01-03, open (its only version).
+      - patient_id: p002
+        status: pending
+        valid_from_date_key: 20240103
+        valid_to_date_key: null

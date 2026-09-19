@@ -13,6 +13,12 @@
 # The `date_ref` column mode (exactly one shape):
 #   {source: <sim_time column>}                 -- the instant shape
 #   {from: <VARCHAR column>, format: "<strptime>"} -- the parse shape
+#   {scd_window: valid_from | valid_to}         -- the bound shape (type-2 only)
+#
+# The bound shape keys an `scd: type2` dim's version rows into `dim_date` by
+# the local date its `scd_window {…, as: date}` sibling names -- `valid_from`
+# for the version's start, `valid_to` for its end (NULL on the open version).
+# The key equals the sibling's yyyymmdd by construction; no separate election.
 #
 # Fixture world (recipe emit):
 #   history                 -- patient status changes at 1/2/3*DAY ns offsets
@@ -25,6 +31,9 @@
 #                          (the same day's yyyymmdd key, instant shape)
 #   dim_patient         -- birth_date (parsed date) beside birth_date_key
 #                          (the same day's yyyymmdd key, parse shape)
+#   dim_patient_status  -- one row per (patient, status version); valid_from /
+#                          valid_to beside their bound keys (the same day's
+#                          yyyymmdd key, bound shape)
 
 mode: dimensional
 
@@ -79,3 +88,34 @@ dimensional:
           date_ref:
             from: prop__dob
             format: "%Y-%m-%d"
+
+    - name: dim_patient_status
+      role: dim
+      scd: type2
+      source:
+        grain: records
+        kind: patient
+      key: [patient_id, valid_from]
+      columns:
+        - name: patient_id
+          from: record_id
+        - name: status
+          from: prop__status
+        - name: valid_from
+          derived:
+            scd_window:
+              bound: valid_from
+              as: date
+        # date_ref, bound shape: this version's start date, keyed into dim_date.
+        - name: valid_from_date_key
+          date_ref:
+            scd_window: valid_from
+        - name: valid_to
+          derived:
+            scd_window:
+              bound: valid_to
+              as: date
+        # date_ref, bound shape: this version's end date (NULL while open).
+        - name: valid_to_date_key
+          date_ref:
+            scd_window: valid_to

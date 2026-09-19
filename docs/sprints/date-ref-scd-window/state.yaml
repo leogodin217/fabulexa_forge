@@ -2,7 +2,7 @@ sprint: date-ref-scd-window
 parent_branch: date-ref-scd-window-work
 baseline_sha: bdfcb2cf8612aca182e8d0b76b985516360ed07d
 started: 2026-09-18
-current_phase: 2
+current_phase: 3
 capabilities:
   - date-dimension: [DateRefSpec.scd_window, resolve_date_ref_source nullable, render_date_ref_expr bound shape, DateRefWindowBoundRequiresScd2, TemporalRenderRequiresAnchor bound shape, slice-only collector no-op]
   - dimensional-scd2: [build_scd2_column_expr_flag bound branch, records-grain source assertion]
@@ -32,7 +32,7 @@ phases:
           - "tests/exporters/dimensional/test_windowing.py"
           - "tests/exporters/dimensional/test_provenance.py"
   2:
-    status: pending
+    status: complete
     name: "The report carriage, the documentation channel, and the recipe"
     demo: "docs/sprints/date-ref-scd-window/demos/phase_2_documented_export.py"
     steps:
