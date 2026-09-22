@@ -224,7 +224,7 @@ elections ([`value-rendering-elections.md`](value-rendering-elections.md)
 | dimensional | `derived: scd_window` | object form `{bound, as}`; the bare-literal shorthand means default rendering | [`dimensional.md`](dimensional.md) § Timestamp source and the runtime anchor |
 | dimensional | `derived: elapsed` | exactly one of `unit` (numeric) / `as: interval` | [`dimensional.md`](dimensional.md) § Derived columns |
 | dimensional | `derived: date_parse` | `{from, format}` | [`dimensional.md`](dimensional.md) § Derived columns |
-| dimensional | `date_ref` | `{source}` — the instant shape is an explicit `date` election; `{from, format}` — the parse shape is the declared parse cast to `DATE`; both then keyed through `date_key_expr` | [`date-dimension.md`](date-dimension.md) § The `date_ref` column mode |
+| dimensional | `date_ref` | `{source}` — the instant shape is an explicit `date` election; `{from, format}` — the parse shape is the declared parse cast to `DATE`; `{scd_window: valid_from \| valid_to}` — the bound shape is the `date` election over an `scd: type2` dim's version bound, a bare literal with nothing to elect; every shape then keyed through `date_key_expr` | [`date-dimension.md`](date-dimension.md) § The `date_ref` column mode |
 | source | declared table (`state` / `junction`) | unified `render:` map — bare shorthand (structural instant) / `{date_parse: …}` entry (payload) | [`source.md`](source.md) § Wallclock timestamps |
 | source | event log | `render:` map, keyed on the log's one instant column `event_sim_time` — a constant of the log's published contract, not a reader question | [`source.md`](source.md) § The event log |
 | base | per-table render declaration | unified `render:` map keyed on the same pre-default column identities the mode's `rename` uses | [`base.md`](base.md) § Presentation, typing, and ordering |
@@ -249,7 +249,9 @@ An elected `date` on `scd_window` renders a date-grained validity window — a
 standard warehouse shape. Same-day versions collapse to `valid_from =
 valid_to` at date grain (the underlying raw-ns bounds remain distinct, and
 version ordering is unaffected); the open interval's `NULL` `valid_to` stays
-`NULL` under every election.
+`NULL` under every election. The bound-shape `date_ref` is this same `date`
+election keyed into `dim_date`, so the key and the date-elected window agree
+by construction ([`date-dimension.md`](date-dimension.md)).
 
 ## Invariants
 

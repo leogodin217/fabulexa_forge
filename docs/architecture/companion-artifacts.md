@@ -70,8 +70,11 @@ sourced per-export facts for tooling.
   report-assembly site like `supplement`. Every report also carries
   `references`, the output-column → referenced-output-table map the
   dimensional plan stamps for `date_ref` (→ `dim_date`) and `fk` (→ the
-  resolved dim) columns; the source and base modes state `calendar=None` and
-  `references={}` ([`date-dimension.md`](date-dimension.md)). The overlay's
+  resolved dim) columns, and `window_bounds`, the bound-shape `date_ref`
+  column → `valid_from` / `valid_to` map stamped at the same site, read by
+  the dictionary alone and transcribed into no manifest field; the source and
+  base modes state `calendar=None`, `references={}`, and `window_bounds={}`
+  ([`date-dimension.md`](date-dimension.md)). The overlay's
   `table:` slots range over plan, `dim_date`, and supplement names alike.
 - **Mode-neutral.** The companion writer holds no mode-specific branching; the
   mode contributes its packaged template and its report.
@@ -240,7 +243,7 @@ Normative rules the code conforms to:
   `unit`, `enum_options`, `primary_key`, `unique`, and `supplement` are `null`.
   The embedded config carries `date_dimension` as declared.
 - **`columns[].references` names the referenced output table.** `"dim_date"`
-  for a `date_ref` column, the resolved dim table's name for an `fk` column,
+  for a `date_ref` column of every shape, the resolved dim table's name for an `fk` column,
   `null` elsewhere — transcribed from the report's `references` map, never
   re-derived from config or SQL.
 
