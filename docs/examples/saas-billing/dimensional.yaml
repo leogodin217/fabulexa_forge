@@ -67,7 +67,19 @@
 #            fact_credit.issued_date_key, fact_lifecycle_interval.
 #            started_date_key / ended_date_key (NULL while open) — so the
 #            reference query reads its month spine, month boundaries and
-#            days-in-month off the calendar instead of computing them.
+#            days-in-month off the calendar instead of computing them. The
+#            three SCD-2 dims key their version windows into it too
+#            (`date_ref: {scd_window: valid_from | valid_to}`, the bound
+#            shape): valid_from_date_key / valid_to_date_key beside each
+#            window, valid_to_date_key NULL on the current version — so a
+#            versioned dim is reached from the calendar by key exactly as a
+#            fact is, and dim_account_terms gets a day key without giving
+#            up its TIMESTAMP bounds. Every other wallclock instant carries
+#            its yyyymmdd key beside it as well (dim_company / dim_user
+#            created_date_key, dim_sku.launched_date_key, dim_rate_tier
+#            effective_from/to_date_key, dim_promotion starts/ends_date_key
+#            — the *_to / ends keys NULL while still in force), so no
+#            instant in the star reaches the calendar only by computing.
 #   DROPPED  simulation mechanisms no billing system would hold (reviewed
 #            with the scenario author):
 #            - company_hub.attach_weight — arrival-sampling knob.
@@ -152,14 +164,26 @@ dimensional:
             timestamp:
               source: created_sim_time
           description: When the company signed up.
+        - name: created_date_key
+          date_ref:
+            source: created_sim_time
+          description: dim_date.date_key of the day the company signed up.
         - name: valid_from
           derived:
             scd_window: {bound: valid_from, as: date}
           description: Date this version of the row took effect.
+        - name: valid_from_date_key
+          date_ref:
+            scd_window: valid_from
+          description: dim_date.date_key of the day this version took effect.
         - name: valid_to
           derived:
             scd_window: {bound: valid_to, as: date}
           description: Date this version was superseded; NULL on the current version.
+        - name: valid_to_date_key
+          date_ref:
+            scd_window: valid_to
+          description: dim_date.date_key of the day this version was superseded; NULL on the current version.
 
     # --- dim_account: billing tenant, Type-1 identity (entity.company_hub) ---
     - name: dim_account
@@ -249,10 +273,18 @@ dimensional:
           derived:
             scd_window: valid_from
           description: Instant this version of the row took effect.
+        - name: valid_from_date_key
+          date_ref:
+            scd_window: valid_from
+          description: dim_date.date_key of the day this version took effect.
         - name: valid_to
           derived:
             scd_window: valid_to
           description: Instant this version was superseded; NULL on the current version.
+        - name: valid_to_date_key
+          date_ref:
+            scd_window: valid_to
+          description: dim_date.date_key of the day this version was superseded; NULL on the current version.
 
     # --- dim_plan_terms: published terms per plan tier (entity.plan_terms) ---
     - name: dim_plan_terms
@@ -309,6 +341,10 @@ dimensional:
             timestamp:
               source: created_sim_time
           description: When the SKU entered the catalogue; Workflow launched mid-run and has no usage before this.
+        - name: launched_date_key
+          date_ref:
+            source: created_sim_time
+          description: dim_date.date_key of the day the SKU entered the catalogue.
 
     # --- dim_rate_tier: graduated price ladder per metered SKU (entity.rate_tier) ---
     - name: dim_rate_tier
@@ -345,11 +381,19 @@ dimensional:
             timestamp:
               source: created_sim_time
           description: Instant this band came into force.
+        - name: effective_from_date_key
+          date_ref:
+            source: created_sim_time
+          description: dim_date.date_key of the day this band came into force.
         - name: effective_to
           derived:
             timestamp:
               source: deactivated_at
           description: Instant this band was withdrawn; NULL while still in force.
+        - name: effective_to_date_key
+          date_ref:
+            source: deactivated_at
+          description: dim_date.date_key of the day this band was withdrawn; NULL while still in force.
 
     # --- dim_promotion: dated free-usage campaigns (entity.promotion) ---
     - name: dim_promotion
@@ -381,11 +425,19 @@ dimensional:
             timestamp:
               source: created_sim_time
           description: Instant the promotion became active.
+        - name: starts_date_key
+          date_ref:
+            source: created_sim_time
+          description: dim_date.date_key of the day the promotion became active.
         - name: ends_at
           derived:
             timestamp:
               source: deactivated_at
           description: Instant the promotion ended; NULL if still active at the end of the extract.
+        - name: ends_date_key
+          date_ref:
+            source: deactivated_at
+          description: dim_date.date_key of the day the promotion ended; NULL if still active at the end of the extract.
 
     # --- fact_credit: one row per credit issued (entity.credit) ---
     - name: fact_credit
@@ -456,6 +508,10 @@ dimensional:
             timestamp:
               source: created_sim_time
           description: When the user's seat was created.
+        - name: created_date_key
+          date_ref:
+            source: created_sim_time
+          description: dim_date.date_key of the day the user's seat was created.
 
     # --- dim_user_status: SCD-2 satellite, seat lifecycle status ---
     - name: dim_user_status
@@ -478,10 +534,18 @@ dimensional:
           derived:
             scd_window: {bound: valid_from, as: date}
           description: Date this version of the row took effect.
+        - name: valid_from_date_key
+          date_ref:
+            scd_window: valid_from
+          description: dim_date.date_key of the day this version took effect.
         - name: valid_to
           derived:
             scd_window: {bound: valid_to, as: date}
           description: Date this version was superseded; NULL on the current version.
+        - name: valid_to_date_key
+          date_ref:
+            scd_window: valid_to
+          description: dim_date.date_key of the day this version was superseded; NULL on the current version.
 
     # --- fact_usage_event: one row per usage session (tick_decision) ---
     - name: fact_usage_event
