@@ -401,6 +401,44 @@ def test_scd2_valid_from_valid_to_have_no_entry(tmp_path: Path) -> None:
     )
 
 
+def test_date_ref_bound_shape_has_no_provenance_entry(tmp_path: Path) -> None:
+    """A bound-shape `date_ref` column has no provenance entry -- it reads
+    no base column -- while its `scd_window` sibling and the carried id/
+    status columns still stamp as before."""
+    emit_dir = _build_provenance_emit(tmp_path)
+    table_decl = TableDecl(
+        name="dim_actor_scd",
+        role="dim",
+        scd="type2",
+        source=SourceDecl(grain="records", kind="actor"),
+        key=["id", "valid_from"],
+        columns=[
+            ColumnDecl(name="id", **{"from": "record_id"}),
+            ColumnDecl(name="status", **{"from": "prop__status"}),
+            ColumnDecl(name="valid_from", derived=DerivedSpec(scd_window="valid_from")),
+            ColumnDecl(
+                name="valid_from_key", date_ref=DateRefSpec(scd_window="valid_from")
+            ),
+            ColumnDecl(
+                name="valid_to_key", date_ref=DateRefSpec(scd_window="valid_to")
+            ),
+        ],
+    )
+    with open_emit(emit_dir) as emit:
+        specs = _compile_specs(emit, _build_config(table_decl), anchor=_ANCHOR)
+
+    provenance = specs["dim_actor_scd"].provenance
+    assert "valid_from" not in provenance
+    assert "valid_from_key" not in provenance
+    assert "valid_to_key" not in provenance
+    assert provenance["id"] == ColumnProvenance(
+        source_table="records__actor", source_column="record_id"
+    )
+    assert provenance["status"] == ColumnProvenance(
+        source_table="records__actor", source_column="prop__status"
+    )
+
+
 def test_fact_grain_columns_carried_computed_columns_absent(tmp_path: Path) -> None:
     """A fact's `from` columns stamp; `derived: ordinal` (seq) and
     `derived: elapsed` (wait_minutes) get no entry."""
@@ -706,6 +744,61 @@ def test_references_stamps_fk_and_date_ref_in_declaration_order(tmp_path: Path) 
     ]
 
 
+def test_references_stamps_bound_shape_date_ref_in_declaration_order(
+    tmp_path: Path,
+) -> None:
+    """`references` maps each bound-shape `date_ref` column to `dim_date`,
+    in declaration order, on a type2 dim compiled beside a fact carrying an
+    `fk` -- the bound shape and `fk` cannot share one `scd: type2` table
+    (Scd2ColumnModeSupported), so the `fk` lives on the sibling fact."""
+    emit_dir = _build_provenance_emit(tmp_path)
+    dim_team = TableDecl(
+        name="dim_team",
+        role="dim",
+        scd="type1",
+        source=SourceDecl(grain="records", kind="team"),
+        key=["team_id"],
+        columns=[ColumnDecl(name="team_id", **{"from": "record_id"})],
+    )
+    dim_actor_scd = TableDecl(
+        name="dim_actor_scd",
+        role="dim",
+        scd="type2",
+        source=SourceDecl(grain="records", kind="actor"),
+        key=["id", "valid_from"],
+        columns=[
+            ColumnDecl(name="id", **{"from": "record_id"}),
+            ColumnDecl(name="valid_from", derived=DerivedSpec(scd_window="valid_from")),
+            ColumnDecl(
+                name="valid_from_key", date_ref=DateRefSpec(scd_window="valid_from")
+            ),
+            ColumnDecl(
+                name="valid_to_key", date_ref=DateRefSpec(scd_window="valid_to")
+            ),
+        ],
+    )
+    fact_actor = TableDecl(
+        name="fact_actor",
+        role="fact",
+        source=SourceDecl(grain="records", kind="actor"),
+        key=["actor_id"],
+        columns=[
+            ColumnDecl(name="actor_id", **{"from": "record_id"}),
+            ColumnDecl(name="team_key", fk=FkClause(to="dim_team", via="reference")),
+        ],
+    )
+    with open_emit(emit_dir) as emit:
+        specs = _compile_specs(
+            emit, _build_config(dim_team, dim_actor_scd, fact_actor), anchor=_ANCHOR
+        )
+
+    assert list(specs["dim_actor_scd"].references.items()) == [
+        ("valid_from_key", "dim_date"),
+        ("valid_to_key", "dim_date"),
+    ]
+    assert list(specs["fact_actor"].references.items()) == [("team_key", "dim_team")]
+
+
 def test_table_with_no_fk_or_date_ref_has_empty_references(tmp_path: Path) -> None:
     """A table declaring neither `fk` nor `date_ref` stamps `references={}`."""
     emit_dir = _build_provenance_emit(tmp_path)
@@ -713,6 +806,92 @@ def test_table_with_no_fk_or_date_ref_has_empty_references(tmp_path: Path) -> No
         specs = _compile_specs(emit, _build_config(_dim_actor_table_decl()))
 
     assert specs["dim_actor"].references == {}
+
+
+# ---------------------------------------------------------------------------
+# QuerySpec.window_bounds: bound-shape date_ref -> its bound, declaration order
+# ---------------------------------------------------------------------------
+
+
+def test_window_bounds_stamps_bound_shape_date_ref_in_declaration_order(
+    tmp_path: Path,
+) -> None:
+    """`QuerySpec.window_bounds` maps each bound-shape `date_ref` column to
+    its bound, in declaration order; every key is also a `references` key
+    mapped to `dim_date`."""
+    emit_dir = _build_provenance_emit(tmp_path)
+    table_decl = TableDecl(
+        name="dim_actor_scd",
+        role="dim",
+        scd="type2",
+        source=SourceDecl(grain="records", kind="actor"),
+        key=["id", "valid_from"],
+        columns=[
+            ColumnDecl(name="id", **{"from": "record_id"}),
+            ColumnDecl(name="valid_from", derived=DerivedSpec(scd_window="valid_from")),
+            ColumnDecl(
+                name="valid_from_key", date_ref=DateRefSpec(scd_window="valid_from")
+            ),
+            ColumnDecl(
+                name="valid_to_key", date_ref=DateRefSpec(scd_window="valid_to")
+            ),
+        ],
+    )
+    with open_emit(emit_dir) as emit:
+        specs = _compile_specs(emit, _build_config(table_decl), anchor=_ANCHOR)
+
+    spec = specs["dim_actor_scd"]
+    assert list(spec.window_bounds.items()) == [
+        ("valid_from_key", "valid_from"),
+        ("valid_to_key", "valid_to"),
+    ]
+    assert spec.window_bounds.keys() <= spec.references.keys()
+    assert all(spec.references[key] == "dim_date" for key in spec.window_bounds)
+
+
+def test_table_with_no_bound_shape_date_ref_has_empty_window_bounds(
+    tmp_path: Path,
+) -> None:
+    """A table declaring no bound-shape `date_ref` stamps `window_bounds={}`."""
+    emit_dir = _build_provenance_emit(tmp_path)
+    with open_emit(emit_dir) as emit:
+        specs = _compile_specs(emit, _build_config(_dim_actor_table_decl()))
+
+    assert specs["dim_actor"].window_bounds == {}
+
+
+def test_base_mode_spec_has_empty_window_bounds(tmp_path: Path) -> None:
+    """A non-dimensional (base) compiled QuerySpec's `window_bounds` stays
+    empty -- only the dimensional engine stamps it."""
+    emit_dir = build_base_test_emit(tmp_path)
+    with open_emit(emit_dir) as emit:
+        specs = build_base_query_specs(
+            emit,
+            ExportConfig(mode="base"),
+            None,
+            None,
+            notice_sink=discard_notice_sink,
+        )
+
+    assert all(spec.window_bounds == {} for spec in specs)
+
+
+def test_source_mode_spec_has_empty_window_bounds(tmp_path: Path) -> None:
+    """A non-dimensional (source) compiled QuerySpec's `window_bounds` stays
+    empty."""
+    emit_dir = build_source_test_emit(tmp_path)
+    config = ExportConfig(
+        mode="source",
+        source=SourceConfig(tables=(SourceTableDecl(name="visit", kind="visit"),)),
+    )
+    with open_emit(emit_dir) as emit:
+        anchor = resolve_effective_anchor(emit.sidecar.runtime(), None, None, None)
+        assert anchor is not None
+        election = resolve_election(emit.sidecar, config.keys)
+        plan = build_source_plan(emit, config, anchor, election, discard_notice_sink)
+        specs = build_source_query_specs(plan)
+
+    assert all(spec.window_bounds == {} for spec in specs)
 
 
 def test_base_mode_spec_has_empty_references(tmp_path: Path) -> None:

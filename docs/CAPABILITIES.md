@@ -493,9 +493,12 @@ Each mode reads the same emit and writes a different target shape.
   day-of-year, ISO year / week, English month and day names, `is_weekend`),
   byte-identical for the same range regardless of emit or anchor. The
   `date_ref` column mode — beside `fk`, on any grain — renders the matching
-  `yyyymmdd` key from a structural instant's local date in the anchor zone or
-  from a parsed date string, through the one key expression `dim_date` itself
-  uses, so a fact's key and the calendar's agree by construction. A key
+  `yyyymmdd` key from a structural instant's local date in the anchor zone,
+  from a parsed date string, or (on an `scd: type2` dim) from the version
+  window's `valid_from` / `valid_to` bound, through the one key expression
+  `dim_date` itself uses, so a fact's key, a version row's key, and the
+  calendar's agree by construction — every table family the mode produces
+  reaches the calendar by key. A key
   outside the declared range is a dangling reference and is refused before
   any table is written (`DateRefOutOfRange`). `dim_date` lands after the
   declared tables and before supplements, delivered `snapshot` every

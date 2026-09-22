@@ -63,6 +63,13 @@ _GRAIN_TIME_KEY: dict[str, str] = {
 #: horizons (an interval end that closes later; a trail that advances).
 _VARYING_SURFACE_COLUMNS: frozenset[str] = frozenset({"lead_sim_time", "left_sim_time"})
 
+#: Variance reading shared by the `derived: scd_window` and bound-shape
+#: `date_ref` `valid_to` branches of `_channel_variance` — both name the
+#: same SCD-2 mechanism.
+_SCD_WINDOW_VALID_TO_VARIANCE = (
+    "is the SCD-2 valid_to bound, closed by the next version"
+)
+
 
 def _source_variance(
     name: str,
@@ -115,8 +122,14 @@ def _channel_variance(
 
     A `date_ref` column's channel is its source's — `date_ref.source` or
     `date_ref.from_` — classified through `_source_variance` exactly as
-    `derived: timestamp` `source` / `date_parse.from` are. This is the ONE
-    per-column variance reading; `window_delivery_class` and
+    `derived: timestamp` `source` / `date_parse.from` are. A bound-shape
+    `date_ref` answers from its own branch, evaluated before any
+    source-column lookup and mirroring the `derived: scd_window` branch:
+    `valid_from` -> None (invariant); `valid_to` -> "is the SCD-2 valid_to
+    bound, closed by the next version". The branch is load-bearing: the
+    reading's fall-through for a column with no source is "invariant",
+    which would misclassify `valid_to`. This is the ONE per-column
+    variance reading; `window_delivery_class` and
     `check_key_columns_stable` change behaviour through it with no edit of
     their own.
     """
@@ -136,7 +149,7 @@ def _channel_variance(
             source = derived.timestamp.source
         elif derived.scd_window is not None:
             if scd_window_bound(derived.scd_window) == "valid_to":
-                return "is the SCD-2 valid_to bound, closed by the next version"
+                return _SCD_WINDOW_VALID_TO_VARIANCE
             return None
         elif derived.elapsed is not None:
             return "derived: elapsed — the counterpart row may land later"
@@ -150,6 +163,10 @@ def _channel_variance(
                 source_table_name,
             )
     if col_decl.date_ref is not None:
+        if col_decl.date_ref.scd_window is not None:
+            if col_decl.date_ref.scd_window == "valid_to":
+                return _SCD_WINDOW_VALID_TO_VARIANCE
+            return None
         source = resolve_date_ref_source(col_decl.date_ref)
     if source is not None:
         return _source_variance(

@@ -52,6 +52,7 @@ def _report() -> ExportReport:
                 supplement=None,
                 calendar=None,
                 references={},
+                window_bounds={},
             ),
         )
     )

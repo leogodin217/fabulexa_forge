@@ -131,7 +131,12 @@ def test_dim_date_sits_after_declared_tables(tmp_path: Path) -> None:
     with open_emit(emit_dir) as emit:
         head = _open_head(emit, config, _anchor_for(emit))
     names = [decl.name for decl in head.tables()]
-    assert names == ["fact_status_event", "dim_patient", "dim_date"]
+    assert names == [
+        "fact_status_event",
+        "dim_patient",
+        "dim_patient_status",
+        "dim_date",
+    ]
     dim_date_decl = next(d for d in head.tables() if d.name == "dim_date")
     assert dim_date_decl.window_delivery == "snapshot"
 

@@ -505,25 +505,28 @@ def build_json_precision_expr(
     return f'{expr} AS "{col_decl.name}"'
 
 
-def resolve_date_ref_source(spec: "DateRefSpec") -> str:
-    """The one source column name a `date_ref` spec reads.
+def resolve_date_ref_source(spec: "DateRefSpec") -> str | None:
+    """The one base column a `date_ref` spec reads, or None.
 
-    The instant shape's `source`, or the parse shape's `from_` —
-    `DateRefSpec.exactly_one_shape` guarantees exactly one is set and
-    non-empty, so this never falls through. Shared by every reader of a
-    `date_ref` column's source identity: provenance, plan-time validation,
-    and window-variance classification.
+    The instant shape's `source`, the parse shape's `from_`, or None for
+    the bound shape, which reads no base column — its input is the SCD-2
+    version relation's bound. Shared by every reader of a `date_ref`
+    column's source identity (provenance, the slice-only read surface,
+    window-variance classification, the records-grain builder); each takes
+    its no-column path on None, and a reader that needs the bound reads
+    `spec.scd_window`.
 
     Args:
         spec: The column's `date_ref` spec.
 
     Returns:
-        The source column name as declared.
+        The source column name as declared, or None for the bound shape.
     """
     if spec.source is not None:
         return spec.source
-    assert spec.from_ is not None
-    return spec.from_
+    if spec.from_ is not None:
+        return spec.from_
+    return None
 
 
 def render_date_ref_expr(
@@ -535,38 +538,42 @@ def render_date_ref_expr(
 ) -> str:
     """Render the SQL SELECT fragment for one `date_ref` column.
 
-    Instant shape: `anchor_temporal_expr` with the `date` election over
-    `qualified_source` (the caller has already enforced the anchor rule, so
-    `anchor` is non-None here — asserted), then `date_key_expr`. Parse
-    shape: over `date_parse_expr` (its loud non-matching-cell failure
-    naming `table_label`, unchanged) cast to DATE, then `date_key_expr`.
-    Either way the fragment ends in `AS "<out_name>"` and is
-    NULL-propagating; both shapes compose the bare forms of the shared
-    renderers, never a re-spelling of their SQL.
+    Instant and bound shapes: `anchor_temporal_expr` with the `date`
+    election over `qualified_source` (the caller has already enforced the
+    anchor rule, so `anchor` is non-None here — asserted), then
+    `date_key_expr`. Parse shape: over `date_parse_expr` (its loud
+    non-matching-cell failure naming `table_label`, unchanged) cast to
+    DATE, then `date_key_expr`. Either way the fragment ends in
+    `AS "<out_name>"` and is NULL-propagating; every shape composes the
+    bare forms of the shared renderers, never a re-spelling of their SQL.
 
     Args:
         spec: The column's `date_ref` spec.
-        qualified_source: The fully table-qualified source column SQL for
-            whichever shape the spec carries (the caller qualifies
-            `spec.source` or `spec.from_` — grain alias, or the SCD-2
-            tracked cast).
+        qualified_source: The fully table-qualified SQL for whichever
+            input the spec's shape reads — the caller qualifies
+            `spec.source` or `spec.from_` (grain alias, or the SCD-2
+            tracked cast), or for the bound shape the version relation's
+            `version_start` / `version_end` column.
         out_name: The output column name.
         table_label: The output table name, interpolated into the parse
-            shape's mismatch error; unused by the instant shape.
-        anchor: The resolved anchor; consulted by the instant shape only.
+            shape's mismatch error; unused by the other shapes.
+        anchor: The resolved anchor; consulted by the instant and bound
+            shapes only.
 
     Returns:
         A SQL SELECT-list expression fragment ending in `AS "<out_name>"`.
     """
-    if spec.source is not None:
-        assert anchor is not None, "date_ref instant shape requires a resolved anchor"
-        date_sql = anchor_temporal_expr(anchor, qualified_source, "date")
-    else:
+    if spec.from_ is not None:
         assert spec.format is not None
         date_sql = (
             f"CAST({date_parse_expr(qualified_source, spec.format, table_label)}"
             " AS DATE)"
         )
+    else:
+        assert anchor is not None, (
+            "date_ref instant/bound shape requires a resolved anchor"
+        )
+        date_sql = anchor_temporal_expr(anchor, qualified_source, "date")
     return f'{date_key_expr(date_sql)} AS "{out_name}"'
 
 
@@ -613,7 +620,13 @@ def build_column_expr(
         (select_expr, join_clauses) — join_clauses is [] for non-FK modes.
 
     Raises:
-        AssertionError: No column mode is set (parse-time validators prevent this).
+        AssertionError: No column mode is set (parse-time validators prevent
+            this); a `date_ref` column's `resolve_date_ref_source` returns
+            None (the bound shape reads no source column, and
+            `DateRefWindowBoundRequiresScd2` refuses it on every
+            non-type-2 table before compile, so the records-grain builder
+            never sees it) — "date_ref on the records-grain builder reads
+            a source column".
     """
     if col_decl.from_ is not None:
         return build_from_expr(col_decl, grain_alias), []
@@ -624,7 +637,11 @@ def build_column_expr(
     if col_decl.date_ref is not None:
         assert table_decl is not None, "table_decl required for date_ref column"
         date_ref = col_decl.date_ref
-        qualified_source = f'"{grain_alias}"."{resolve_date_ref_source(date_ref)}"'
+        source_column = resolve_date_ref_source(date_ref)
+        assert source_column is not None, (
+            "date_ref on the records-grain builder reads a source column"
+        )
+        qualified_source = f'"{grain_alias}"."{source_column}"'
         return (
             render_date_ref_expr(
                 date_ref, qualified_source, col_decl.name, table_decl.name, anchor
@@ -737,10 +754,13 @@ def resolve_carried_source_column(col_decl: "ColumnDecl") -> str | None:
     correlation; the pure per-row value renderings `derived: decimal` /
     `json_precision` / `date_parse` / `value_map` -> the mode's own `from_`;
     `derived: timestamp` -> timestamp.source; `date_ref` -> its instant
-    shape's `source` or its parse shape's `from_`. Every other mode (`null`,
-    `fk`, `lookup`, `derived: ordinal` / `elapsed` / `scd_window`) carries no
-    single faithfully-mapped source column and returns None — a computed
-    value, not a carry.
+    shape's `source` or its parse shape's `from_` (via `resolve_date_ref_source`;
+    a bound-shape `date_ref` returns None — it reads no single source column,
+    exactly as `derived: scd_window` does — so `build_column_provenance`
+    stamps no entry for it). Every other mode (`null`, `fk`, `lookup`,
+    `derived: ordinal` / `elapsed` / `scd_window`) carries no single
+    faithfully-mapped source column and returns None — a computed value,
+    not a carry.
 
     Args:
         col_decl: The output column declaration.

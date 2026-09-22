@@ -368,7 +368,7 @@ a check, no operation whose defect the reader's skip-guards silently swallow).
 
 | Recipe | What it teaches |
 |---|---|
-| [`date-dimension`](../../examples/recipes/date-dimension/config.yaml) | The `date_dimension: {from, to}` block materializing the generated calendar `dim_date`, and the `date_ref` column mode in both shapes — an instant's `yyyymmdd` key beside its `derived: timestamp` on a fact, and a parsed date string's key beside its `derived: date_parse` on a dim — every key matching a `dim_date` row by construction |
+| [`date-dimension`](../../examples/recipes/date-dimension/config.yaml) | The `date_dimension: {from, to}` block materializing the generated calendar `dim_date`, and the `date_ref` column mode in all three shapes — an instant's `yyyymmdd` key beside its `derived: timestamp` on a fact, a parsed date string's key beside its `derived: date_parse` on a dim, and an `scd: type2` dim's `valid_from` / `valid_to` bound keys beside their date-elected `scd_window` siblings (`valid_to_date_key` `NULL` on the open version) — every key matching a `dim_date` row by construction |
 
 
 ### Source

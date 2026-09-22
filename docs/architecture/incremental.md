@@ -167,9 +167,10 @@ likewise `snapshot` in every emitting window: `compile_date_dimension_spec` is
 called with `write_mode='replace'` and its spec appended after the declared
 tables and before the supplements. Horizon-invariant by construction — it reads
 no emit table — so an empty window and an explicit range deliver it whole. A
-`date_ref` column's value channel is its source column's under the one
-variance reading below, so a `date_ref` over a source that can change makes its
-table `upsert`, never `append`. The range guard (`check_date_refs_in_range`)
+`date_ref` column's value channel is its input's under the one variance
+reading below — its source column's for the instant and parse shapes, its
+bound's for the bound shape — so a `date_ref` over a source that can change,
+or over the `valid_to` bound, makes its table `upsert`, never `append`. The range guard (`check_date_refs_in_range`)
 runs per window over that window's compiled relations — the delta or the
 snapshot the window delivers — before the window's write, after the
 `WindowKeyDuplicate` guard and the overlay check.
@@ -192,8 +193,8 @@ read by the classifier and the key gate alike so the two cannot drift):
 | Column form | Horizon-invariant iff |
 |---|---|
 | `from:` / `correlation:` / `value_map.from` / `decimal.from` / `date_parse.from` / `json_precision.from` / `derived: timestamp` `source` / `date_ref` `source` / `from` | The source column is constant: an identity column, `created_sim_time`, `sim_time`, `joined_sim_time`, `value` / `property` on a history grain, an element field, a `history_tracked: false` property or its `ref_index__` sibling — or, on an `scd: type2` dim, any property (a version row carries its version's value). Not: `active`, `deactivated_at`, `last_mutation_sim_time` (the recorded trail advances), a tracked property on a non-versioned table, `lead_sim_time`, `left_sim_time` |
-| `derived: scd_window: valid_from` | Always (a version's start is its identity) |
-| `derived: scd_window: valid_to` | Never (the successor closes it) |
+| `derived: scd_window: valid_from` / `date_ref: {scd_window: valid_from}` | Always (a version's start is its identity) |
+| `derived: scd_window: valid_to` / `date_ref: {scd_window: valid_to}` | Never (the successor closes it). The bound-shape `date_ref` answers from its own branch of the reading, evaluated before any source-column lookup — the reading's fall-through for a column with no source is "invariant", so the branch is load-bearing |
 | `derived: elapsed` | Never (the counterpart row may land later) |
 | `derived: ordinal` | `order_by` resolves to the grain's raw time key under a window-monotone rendering (`created_sim_time` on a records grain, `sim_time` on a history grain, `joined_sim_time` on a membership grain; not a `time` election — the election-aware ordinal amendment, [`dimensional.md`](dimensional.md) § Derived columns) **and** `partition_by` is horizon-invariant. Later rows then never renumber earlier ones |
 | `fk via: reference` | Every hop column on the resolved path is `history_tracked: false` (the terminal `record_id` is identity) |

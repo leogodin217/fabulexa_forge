@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from datetime import date
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 from exporters.companion._fixtures import write_documented_emit, write_minimal_emit
 from fabulexa_forge.config.models import ExportConfig
@@ -59,6 +59,7 @@ def _dim_date_table_report(*, row_count: int | None = 14610) -> TableReport:
         supplement=None,
         calendar=CalendarSource(from_=_CALENDAR_FROM, to=_CALENDAR_TO),
         references={},
+        window_bounds={},
     )
 
 
@@ -94,6 +95,7 @@ def _fk_and_date_ref_table_report(
             "event_date_key": DATE_DIMENSION_TABLE_NAME,
             "doctor_fk": "dim_doctor",
         },
+        window_bounds={},
     )
 
 
@@ -115,6 +117,33 @@ def _parse_shape_date_ref_table_report() -> TableReport:
         supplement=None,
         calendar=None,
         references={"birth_date_key": DATE_DIMENSION_TABLE_NAME},
+        window_bounds={},
+    )
+
+
+def _bound_shape_date_ref_table_report(
+    *,
+    bound: "Literal['valid_from', 'valid_to']",
+    author_descriptions: "Mapping[str, str] | None" = None,
+) -> TableReport:
+    """One type-2 dim's bound-shape `date_ref` column report: the column
+    carries no provenance entry (it reads no base column) and a
+    `window_bounds` entry naming `bound`."""
+    column_name = f"{bound}_key"
+    return TableReport(
+        name="dim_patient_scd",
+        columns=((column_name, "INTEGER"),),
+        row_count=1,
+        keys=None,
+        provenance={},
+        kind_values={},
+        author_descriptions=author_descriptions or {},
+        author_table_description=None,
+        event_log=False,
+        supplement=None,
+        calendar=None,
+        references={column_name: DATE_DIMENSION_TABLE_NAME},
+        window_bounds={column_name: bound},
     )
 
 
@@ -236,6 +265,64 @@ def test_date_ref_parse_shape_prose_names_source_column_only(
 
 
 # ---------------------------------------------------------------------------
+# Dictionary: the bound-shape `date_ref` column's pinned prose
+# ---------------------------------------------------------------------------
+
+
+def test_bound_shape_valid_from_uses_pinned_bound_prose(tmp_path: Path) -> None:
+    """A bound-shape column with no author override resolves to the pinned
+    template naming its `window_bounds` bound, origin "forge", no unit."""
+    doc = _minimal_documentation(tmp_path)
+    table = _bound_shape_date_ref_table_report(bound="valid_from")
+
+    column_doc = resolve_column_doc(doc, table, "valid_from_key", "INTEGER")
+
+    assert column_doc is not None
+    assert column_doc.description == (
+        "Calendar key (`yyyymmdd`) into `dim_date`, derived from this"
+        " version's `valid_from` bound"
+    )
+    assert column_doc.origin == "forge"
+    assert column_doc.unit is None
+
+
+def test_bound_shape_valid_to_uses_pinned_bound_prose(tmp_path: Path) -> None:
+    """The `valid_to` variant names `valid_to`, not `valid_from`."""
+    doc = _minimal_documentation(tmp_path)
+    table = _bound_shape_date_ref_table_report(bound="valid_to")
+
+    column_doc = resolve_column_doc(doc, table, "valid_to_key", "INTEGER")
+
+    assert column_doc is not None
+    assert column_doc.description == (
+        "Calendar key (`yyyymmdd`) into `dim_date`, derived from this"
+        " version's `valid_to` bound"
+    )
+    assert column_doc.origin == "forge"
+    assert column_doc.unit is None
+
+
+def test_bound_shape_with_author_description_wins_over_pinned_prose(
+    tmp_path: Path,
+) -> None:
+    """An author override on a bound-shape column renders the author's
+    prose at origin "author" with no unit -- the pinned bound prose never
+    renders beside it."""
+    doc = _minimal_documentation(tmp_path)
+    table = _bound_shape_date_ref_table_report(
+        bound="valid_to",
+        author_descriptions={"valid_to_key": "When this version stopped applying."},
+    )
+
+    column_doc = resolve_column_doc(doc, table, "valid_to_key", "INTEGER")
+
+    assert column_doc is not None
+    assert column_doc.description == "When this version stopped applying."
+    assert column_doc.origin == "author"
+    assert column_doc.unit is None
+
+
+# ---------------------------------------------------------------------------
 # Manifest: tables[].calendar / columns[].references
 # ---------------------------------------------------------------------------
 
@@ -330,16 +417,53 @@ def test_dim_date_supplement_primary_key_unique_are_null(tmp_path: Path) -> None
     assert dim_date_table["unique"] is None
 
 
+def test_bound_shape_column_entry_carries_references_and_pinned_description(
+    tmp_path: Path,
+) -> None:
+    """The bound-shape column's manifest entry carries `references:
+    "dim_date"` and the pinned bound-shape description -- the same key set
+    as any instant-shape column entry (no shape-specific field)."""
+    emit_dir = tmp_path / "emit"
+    emit_dir.mkdir()
+    write_documented_emit(emit_dir)
+
+    document = _build_document(
+        emit_dir,
+        ExportReport(
+            tables=(
+                _fk_and_date_ref_table_report(),
+                _bound_shape_date_ref_table_report(bound="valid_to"),
+            )
+        ),
+    )
+
+    tables = document["tables"]
+    assert isinstance(tables, list)
+    by_name = {table["name"]: table for table in tables}
+    instant_column = by_name["dim_patient"]["columns"][1]
+    bound_column = by_name["dim_patient_scd"]["columns"][0]
+    assert bound_column["references"] == DATE_DIMENSION_TABLE_NAME
+    assert bound_column["description"] == (
+        "Calendar key (`yyyymmdd`) into `dim_date`, derived from this"
+        " version's `valid_to` bound"
+    )
+    assert set(bound_column) == set(instant_column)
+
+
 def test_manifest_bytes_deterministic_with_calendar_and_references(
     tmp_path: Path,
 ) -> None:
-    """Two renders of a document carrying `calendar` and `references` are
-    byte-identical."""
+    """Two renders of a document carrying `calendar`, `references`, and a
+    bound-shape `window_bounds` entry are byte-identical."""
     emit_dir = tmp_path / "emit"
     emit_dir.mkdir()
     write_documented_emit(emit_dir)
     report = ExportReport(
-        tables=(_fk_and_date_ref_table_report(), _dim_date_table_report())
+        tables=(
+            _fk_and_date_ref_table_report(),
+            _bound_shape_date_ref_table_report(bound="valid_from"),
+            _dim_date_table_report(),
+        )
     )
 
     first = render_manifest_bytes(_build_document(emit_dir, report))
@@ -406,3 +530,32 @@ def test_readme_date_ref_column_lines_carry_no_unit(tmp_path: Path) -> None:
     expected_line = "- `event_date_key` (INTEGER): When the status change happened."
     assert expected_line in text
     assert "event_date_key` (INTEGER) [" not in text
+
+
+def test_readme_bound_shape_column_line_renders_pinned_bound_prose(
+    tmp_path: Path,
+) -> None:
+    """A bound-shape column's line renders the pinned bound prose, with no
+    `[unit]` suffix."""
+    emit_dir = tmp_path / "emit"
+    emit_dir.mkdir()
+    write_documented_emit(emit_dir)
+
+    with open_emit(emit_dir) as emit:
+        text = render_readme(
+            "dimensional",
+            emit,
+            ExportReport(
+                tables=(_bound_shape_date_ref_table_report(bound="valid_to"),)
+            ),
+            None,
+            None,
+            "manifest.json",
+        )
+
+    expected_line = (
+        "- `valid_to_key` (INTEGER): Calendar key (`yyyymmdd`) into `dim_date`,"
+        " derived from this version's `valid_to` bound"
+    )
+    assert expected_line in text
+    assert "valid_to_key` (INTEGER) [" not in text

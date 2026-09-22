@@ -358,6 +358,48 @@ def test_scd2_dim_tracked_read_is_invariant_valid_to_is_not(sidecar: Sidecar) ->
     assert _classify(with_valid_to, sidecar) == "upsert"
 
 
+def test_date_ref_bound_valid_from_key_is_append(sidecar: Sidecar) -> None:
+    """A bound-shape `date_ref` `valid_from` key classifies like its
+    `derived: scd_window` sibling: invariant."""
+    table = TableDecl(
+        name="dim_patient_status",
+        role="dim",
+        scd="type2",
+        source=SourceDecl(grain="records", kind="patient"),
+        key=["patient_id", "valid_from"],
+        columns=[
+            _from("patient_id", "record_id"),
+            _derived("valid_from", scd_window="valid_from"),
+            ColumnDecl(
+                name="valid_from_key", date_ref=DateRefSpec(scd_window="valid_from")
+            ),
+        ],
+    )
+    assert _classify(table, sidecar) == "append"
+
+
+def test_date_ref_bound_valid_to_key_is_upsert(sidecar: Sidecar) -> None:
+    """Adding a bound-shape `date_ref` `valid_to` key varies -- upsert."""
+    table = TableDecl(
+        name="dim_patient_status",
+        role="dim",
+        scd="type2",
+        source=SourceDecl(grain="records", kind="patient"),
+        key=["patient_id", "valid_from"],
+        columns=[
+            _from("patient_id", "record_id"),
+            _derived("valid_from", scd_window="valid_from"),
+            ColumnDecl(
+                name="valid_from_key", date_ref=DateRefSpec(scd_window="valid_from")
+            ),
+            ColumnDecl(
+                name="valid_to_key", date_ref=DateRefSpec(scd_window="valid_to")
+            ),
+        ],
+    )
+    assert _classify(table, sidecar) == "upsert"
+
+
 # ---------------------------------------------------------------------------
 # KeyColumnsStable
 # ---------------------------------------------------------------------------
@@ -403,6 +445,50 @@ def test_key_on_date_ref_created_sim_time_accepted(sidecar: Sidecar) -> None:
         key=["patient_id", "created_key"],
     )
     check_key_columns_stable(table, _config(table), sidecar)  # must not raise
+
+
+def test_key_on_date_ref_bound_valid_from_accepted(sidecar: Sidecar) -> None:
+    """A bound-shape `date_ref` `valid_from` key beside the `scd_window`
+    column is accepted -- both invariant."""
+    table = TableDecl(
+        name="dim_patient_status",
+        role="dim",
+        scd="type2",
+        source=SourceDecl(grain="records", kind="patient"),
+        key=["patient_id", "valid_from_key"],
+        columns=[
+            _from("patient_id", "record_id"),
+            _derived("valid_from", scd_window="valid_from"),
+            ColumnDecl(
+                name="valid_from_key", date_ref=DateRefSpec(scd_window="valid_from")
+            ),
+        ],
+    )
+    check_key_columns_stable(table, _config(table), sidecar)  # must not raise
+
+
+def test_key_on_date_ref_bound_valid_to_refused(sidecar: Sidecar) -> None:
+    """A bound-shape `date_ref` `valid_to` key is refused -- it closes on
+    the next version, so it cannot identify a row for the whole run."""
+    table = TableDecl(
+        name="dim_patient_status",
+        role="dim",
+        scd="type2",
+        source=SourceDecl(grain="records", kind="patient"),
+        key=["patient_id", "valid_to_key"],
+        columns=[
+            _from("patient_id", "record_id"),
+            _derived("valid_from", scd_window="valid_from"),
+            ColumnDecl(
+                name="valid_to_key", date_ref=DateRefSpec(scd_window="valid_to")
+            ),
+        ],
+    )
+    with pytest.raises(
+        ExportError,
+        match="is the SCD-2 valid_to bound, closed by the next version",
+    ):
+        check_key_columns_stable(table, _config(table), sidecar)
 
 
 def test_stable_key_passes(sidecar: Sidecar) -> None:

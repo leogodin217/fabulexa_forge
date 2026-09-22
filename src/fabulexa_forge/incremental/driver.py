@@ -242,9 +242,9 @@ def _build_windowed_report(
     the CSV/DuckDB constraint-surface split `write_query_specs` uses for
     full exports: DuckDB carries the spec's declared keys, CSV always None.
     `provenance`, `kind_values`, `author_descriptions`,
-    `author_table_description`, `event_log`, `supplement`, `calendar`, and
-    `references` are forwarded from each spec verbatim — windowed and full
-    stamping are identical for the same table.
+    `author_table_description`, `event_log`, `supplement`, `calendar`,
+    `references`, and `window_bounds` are forwarded from each spec
+    verbatim — windowed and full stamping are identical for the same table.
 
     Args:
         specs: The compiled windowed QuerySpecs, in plan iteration order.
@@ -271,6 +271,7 @@ def _build_windowed_report(
                     supplement=spec.supplement,
                     calendar=spec.calendar,
                     references=spec.references,
+                    window_bounds=spec.window_bounds,
                 )
                 for spec in specs
             )

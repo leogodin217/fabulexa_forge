@@ -307,6 +307,30 @@ def _table_references(
     return refs
 
 
+def _table_window_bounds(
+    table_decl: "TableDecl",
+) -> "Mapping[str, Literal['valid_from', 'valid_to']]":
+    """The table's bound-shape `date_ref` column -> bound map, declaration order.
+
+    One entry per column whose `date_ref.scd_window` is set, valued with
+    that bound; no entry otherwise. Pure. The sibling of `_table_references`
+    — stamped onto the same `QuerySpec` at the same site, so every key here
+    is a `references` key mapped to `dim_date` (§ Invariants 3).
+
+    Args:
+        table_decl: The output table declaration.
+
+    Returns:
+        Output column name -> "valid_from" | "valid_to"; empty when the
+        table declares no bound-shape `date_ref`.
+    """
+    bounds: dict[str, Literal["valid_from", "valid_to"]] = {}
+    for col_decl in table_decl.columns:
+        if col_decl.date_ref is not None and col_decl.date_ref.scd_window is not None:
+            bounds[col_decl.name] = col_decl.date_ref.scd_window
+    return bounds
+
+
 def build_query_specs(
     emit: "Emit",
     config: DimensionalConfig,
@@ -390,7 +414,10 @@ def build_query_specs(
         kind-name-as-value output column. `author_descriptions` is stamped
         from the table's column entries (§ `_table_author_descriptions`),
         keyed by each entry's own output name. `references` is stamped from
-        `_table_references(table_decl, config)`.
+        `_table_references(table_decl, config)`; `window_bounds` from
+        `_table_window_bounds(table_decl)`. The windowed compile derives its
+        specs from the full compile through `dataclasses.replace` and so
+        carries `window_bounds` unchanged.
 
     Raises:
         ExportError: An always-on business rule fails (including
@@ -473,6 +500,7 @@ def build_query_specs(
                 author_descriptions=_table_author_descriptions(table_decl),
                 author_table_description=table_decl.description,
                 references=_table_references(table_decl, config),
+                window_bounds=_table_window_bounds(table_decl),
             )
         )
 

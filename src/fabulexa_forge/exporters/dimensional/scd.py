@@ -13,7 +13,7 @@ Tracked/static split rules:
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 from fabulexa_forge.anchor import render_anchor_temporal_expr
 from fabulexa_forge.config.models import scd_window_bound, scd_window_render
@@ -43,6 +43,16 @@ _VERSIONS_ALIAS = "_versions"
 _RECORDS_ALIAS = "_records"
 
 
+def _version_bound_column(bound: Literal["valid_from", "valid_to"] | None) -> str:
+    """The versioned-intervals column backing an SCD-2 bound.
+
+    Shared by the `derived: scd_window` and bound-shape `date_ref` branches
+    of `build_scd2_column_expr_flag`, which both read version boundaries
+    off the same versioned-intervals subquery.
+    """
+    return "version_start" if bound == "valid_from" else "version_end"
+
+
 def build_scd2_column_expr_flag(
     col_decl: "ColumnDecl",
     version_alias: str,
@@ -67,11 +77,16 @@ def build_scd2_column_expr_flag(
     - `derived: scd_window` renders the version bounds
       (version_start / version_end) through render_anchor_temporal_expr.
     - `null` emits a typed NULL.
-    - `date_ref` renders through render_date_ref_expr, handed the same
-      tracked/untracked source_expr as every other mode — tracked sources
-      read per version through the declared-type cast, untracked per
-      record, the source-class-blind posture the other value renderings
-      have.
+    - A bound-shape `date_ref` renders through render_date_ref_expr handed
+      `"<version_alias>"."version_start"` (`valid_from`) / `"version_end"`
+      (`valid_to`) — the same input `derived: scd_window` reads — before
+      any source-column resolution, beside the `derived: scd_window` and
+      `null` branches.
+    - An instant- or parse-shape `date_ref` renders through
+      render_date_ref_expr, handed the same tracked/untracked source_expr
+      as every other mode — tracked sources read per version through the
+      declared-type cast, untracked per record, the source-class-blind
+      posture the other value renderings have.
     - A pure per-row value rendering (`derived: timestamp` / `date_parse` /
       `value_map` / `decimal` / `json_precision`) compiles through the same
       per-column builder every records-grain column uses
@@ -117,7 +132,7 @@ def build_scd2_column_expr_flag(
     if col_decl.derived is not None and col_decl.derived.scd_window is not None:
         bound = scd_window_bound(col_decl.derived.scd_window)
         render = scd_window_render(col_decl.derived.scd_window)
-        col_name = "version_start" if bound == "valid_from" else "version_end"
+        col_name = _version_bound_column(bound)
         qualified_source = f'"{version_alias}"."{col_name}"'
         return render_anchor_temporal_expr(
             anchor, qualified_source, col_decl.name, render
@@ -125,6 +140,14 @@ def build_scd2_column_expr_flag(
 
     if col_decl.null is not None:
         return f'CAST(NULL AS VARCHAR) AS "{col_decl.name}"'
+
+    if col_decl.date_ref is not None and col_decl.date_ref.scd_window is not None:
+        bound = col_decl.date_ref.scd_window
+        col_name = _version_bound_column(bound)
+        qualified_source = f'"{version_alias}"."{col_name}"'
+        return render_date_ref_expr(
+            col_decl.date_ref, qualified_source, col_decl.name, table_label, anchor
+        )
 
     src = resolve_carried_source_column(col_decl)
     assert src is not None, f"column '{col_decl.name}': no source column resolved"

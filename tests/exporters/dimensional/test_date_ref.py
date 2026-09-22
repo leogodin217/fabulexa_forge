@@ -38,13 +38,16 @@ from fabulexa_forge.config.models import (
     DerivedSpec,
     DimensionalConfig,
     OrdinalSpec,
+    ScdWindowSpec,
     SourceDecl,
     TableDecl,
     TimestampSpec,
 )
 from fabulexa_forge.exporters.dimensional.columns import (
+    build_column_expr,
     build_ordinal_expr,
     render_date_ref_expr,
+    resolve_date_ref_source,
 )
 from fabulexa_forge.exporters.dimensional.engine import build_query_specs
 from fabulexa_forge.exporters.dimensional.scd import build_scd2_column_expr_flag
@@ -54,6 +57,7 @@ from fabulexa_forge.reader.errors import RunDatabaseError
 from fabulexa_forge.reader.sidecar import Sidecar
 
 _DAY_NS = 86_400 * 1_000_000_000
+_HOUR_NS = 3_600 * 1_000_000_000
 
 
 def _anchor(zone: str) -> EffectiveAnchor:
@@ -189,7 +193,30 @@ def _compile_and_run(
 
 
 # ---------------------------------------------------------------------------
-# render_date_ref_expr: the SQL fragment, both shapes
+# resolve_date_ref_source: the one base column, or None for the bound shape
+# ---------------------------------------------------------------------------
+
+
+def test_resolve_date_ref_source_instant_and_parse_shapes_return_declared_name() -> (
+    None
+):
+    """The instant shape returns `source`; the parse shape returns `from_`."""
+    assert resolve_date_ref_source(DateRefSpec(source="sim_time")) == "sim_time"
+    assert (
+        resolve_date_ref_source(DateRefSpec(from_="dob_text", format="%Y-%m-%d"))
+        == "dob_text"
+    )
+
+
+@pytest.mark.parametrize("bound", ["valid_from", "valid_to"])
+def test_resolve_date_ref_source_bound_shape_returns_none(bound: str) -> None:
+    """The bound shape reads no base column -- its input is the SCD-2
+    version relation's bound, not a source column."""
+    assert resolve_date_ref_source(DateRefSpec(scd_window=bound)) is None
+
+
+# ---------------------------------------------------------------------------
+# render_date_ref_expr: the SQL fragment, all three shapes
 # ---------------------------------------------------------------------------
 
 
@@ -224,6 +251,30 @@ def test_render_date_ref_expr_instant_shape_with_no_anchor_asserts() -> None:
     with pytest.raises(AssertionError):
         render_date_ref_expr(
             spec, '"_grain"."created_sim_time"', "event_key", "fx", None
+        )
+
+
+def test_render_date_ref_expr_bound_shape_composes_shared_renderers() -> None:
+    """The bound shape composes `anchor_temporal_expr(..., "date")` then
+    `date_key_expr` over the version relation's bound column, exactly as the
+    instant shape does over a source column."""
+    spec = DateRefSpec(scd_window="valid_from")
+    qualified_source = '"_versions"."version_start"'
+    expr = render_date_ref_expr(
+        spec, qualified_source, "valid_from_date_key", "dim_company", _UTC
+    )
+
+    date_sql = anchor_temporal_expr(_UTC, qualified_source, "date")
+    assert expr == f'{date_key_expr(date_sql)} AS "valid_from_date_key"'
+
+
+def test_render_date_ref_expr_bound_shape_with_no_anchor_asserts() -> None:
+    """The bound shape asserts a resolved anchor, exactly as the instant
+    shape does."""
+    spec = DateRefSpec(scd_window="valid_to")
+    with pytest.raises(AssertionError):
+        render_date_ref_expr(
+            spec, '"_versions"."version_end"', "valid_to_date_key", "dim_company", None
         )
 
 
@@ -495,6 +546,30 @@ def test_scd2_date_ref_instant_shape_untracked_source_reads_per_record() -> None
     assert 'AS "created_key"' in expr
 
 
+def test_scd2_date_ref_bound_shape_valid_from_reads_version_start() -> None:
+    """The bound shape's `valid_from` reads `"_versions"."version_start"` --
+    the branch runs before any source-column resolution, so a tracked-props
+    set that would otherwise route source-class reading never matters."""
+    col = ColumnDecl(
+        name="valid_from_date_key", date_ref=DateRefSpec(scd_window="valid_from")
+    )
+    expr = _flag_expr(col, frozenset({"checkin_date"}), _UTC)
+    assert '"_versions"."version_start"' in expr
+    assert '"_records"' not in expr
+    assert 'AS "valid_from_date_key"' in expr
+
+
+def test_scd2_date_ref_bound_shape_valid_to_reads_version_end() -> None:
+    """The bound shape's `valid_to` reads `"_versions"."version_end"`."""
+    col = ColumnDecl(
+        name="valid_to_date_key", date_ref=DateRefSpec(scd_window="valid_to")
+    )
+    expr = _flag_expr(col, frozenset(), _UTC)
+    assert '"_versions"."version_end"' in expr
+    assert '"_records"' not in expr
+    assert 'AS "valid_to_date_key"' in expr
+
+
 # ---------------------------------------------------------------------------
 # The ordinal amendment: a date_ref column as partition_by / order_by sibling
 # ---------------------------------------------------------------------------
@@ -526,6 +601,288 @@ def test_ordinal_partition_and_order_by_date_ref_column_compiles() -> None:
     expr = build_ordinal_expr(ordinal_col, table_decl=tbl)
     assert 'PARTITION BY "dob_key"' in expr
     assert 'ORDER BY "dob_key", "_grain"."record_id"' in expr
+
+
+# ---------------------------------------------------------------------------
+# Bound shape end-to-end: an scd: type2 dim keying version rows into
+# dim_date by valid_from / valid_to.
+# ---------------------------------------------------------------------------
+
+_COMPANY_COLUMNS: list[dict[str, object]] = [
+    identity_column("fork_path", "VARCHAR"),
+    identity_column("record_id", "VARCHAR"),
+    {"name": "created_sim_time", "type": "BIGINT"},
+    {"name": "active", "type": "BOOLEAN"},
+    {"name": "deactivated_at", "type": "BIGINT"},
+    {"name": "last_mutation_sim_time", "type": "BIGINT"},
+    identity_column("record_index", "BIGINT"),
+    prop_column(
+        "prop__status", "VARCHAR", history_tracked=True, temporal_class="tracked"
+    ),
+]
+
+
+def _build_scd_window_emit(tmp_path: Path) -> Path:
+    """c001: three prop__status changes -- the first two 2h apart (the
+    first crosses local midnight relative to UTC under America/New_York,
+    and both land on the same New_York local date), the third stays open.
+    c002: one (open) version."""
+    db_path = tmp_path / "run.duckdb"
+    conn = duckdb.connect(str(db_path))
+    conn.execute(_create_ddl("records__company", _COMPANY_COLUMNS))
+    conn.execute(
+        'INSERT INTO "records__company" VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+        ["trunk", "c001", 0, True, None, 0, 0, "pending"],
+    )
+    conn.execute(
+        'INSERT INTO "records__company" VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+        ["trunk", "c002", 0, True, None, 0, 1, "pending"],
+    )
+    conn.execute(_create_ddl("history", _HISTORY_COLUMNS))
+    status_rows = [
+        ("trunk", "company", "c001", "status", 2 * _HOUR_NS, "active"),
+        ("trunk", "company", "c001", "status", 4 * _HOUR_NS, "suspended"),
+        ("trunk", "company", "c001", "status", 30 * _HOUR_NS, "active"),
+        ("trunk", "company", "c002", "status", 10 * _HOUR_NS, "active"),
+    ]
+    for row in status_rows:
+        conn.execute('INSERT INTO "history" VALUES (?, ?, ?, ?, ?, ?)', list(row))
+    conn.close()
+
+    write_emit(
+        tmp_path,
+        tables=[
+            _table_spec(
+                "records__company",
+                "records",
+                _COMPANY_COLUMNS,
+                2,
+                record_kind="company",
+            ),
+            _table_spec("history", "fixed", _HISTORY_COLUMNS, len(status_rows)),
+        ],
+        branches=[{"fork_path": "trunk", "parent": None, "slice_at": 40 * _HOUR_NS}],
+    )
+    return tmp_path
+
+
+def _type2_dim_company_table_decl(*, with_valid_to: bool) -> TableDecl:
+    """`dim_company`: the `valid_from` bound (column + key), plus the
+    `valid_to` bound (column + key) when `with_valid_to`."""
+    columns = [
+        ColumnDecl(name="id", **{"from": "record_id"}),
+        ColumnDecl(name="status", **{"from": "prop__status"}),
+        ColumnDecl(
+            name="valid_from",
+            derived=DerivedSpec(
+                scd_window=ScdWindowSpec(bound="valid_from", **{"as": "date"})
+            ),
+        ),
+        ColumnDecl(
+            name="valid_from_date_key", date_ref=DateRefSpec(scd_window="valid_from")
+        ),
+    ]
+    if with_valid_to:
+        columns.append(
+            ColumnDecl(
+                name="valid_to",
+                derived=DerivedSpec(
+                    scd_window=ScdWindowSpec(bound="valid_to", **{"as": "date"})
+                ),
+            )
+        )
+        columns.append(
+            ColumnDecl(
+                name="valid_to_date_key", date_ref=DateRefSpec(scd_window="valid_to")
+            )
+        )
+    return TableDecl(
+        name="dim_company",
+        role="dim",
+        scd="type2",
+        source=SourceDecl(grain="records", kind="company"),
+        key=["id", "valid_from"],
+        columns=columns,
+    )
+
+
+@pytest.mark.parametrize("zone", ["UTC", "America/New_York"])
+def test_scd_window_bound_keys_agree_with_sibling_on_every_version(
+    tmp_path: Path, zone: str
+) -> None:
+    """Every version row's bound key equals `date_key_expr` over its sibling
+    `derived: scd_window {..., as: date}` column, under UTC and under a
+    zone whose local date differs from the UTC date for one version."""
+    emit_dir = _build_scd_window_emit(tmp_path)
+    rows = _compile_and_run(
+        emit_dir, _type2_dim_company_table_decl(with_valid_to=True), _anchor(zone)
+    )
+    for valid_from, valid_from_key, valid_to, valid_to_key in zip(
+        rows["valid_from"],
+        rows["valid_from_date_key"],
+        rows["valid_to"],
+        rows["valid_to_date_key"],
+    ):
+        assert valid_from_key == _date_key(valid_from)
+        assert valid_to_key == (_date_key(valid_to) if valid_to is not None else None)
+
+
+def test_scd_window_bound_key_crosses_local_midnight_under_new_york(
+    tmp_path: Path,
+) -> None:
+    """c001's first version starts 2h after midnight UTC -- its `valid_from`
+    key differs between UTC and America/New_York, though the family agrees
+    under either zone."""
+    emit_dir = _build_scd_window_emit(tmp_path)
+    utc_rows = _compile_and_run(
+        emit_dir, _type2_dim_company_table_decl(with_valid_to=True), _anchor("UTC")
+    )
+    ny_rows = _compile_and_run(
+        emit_dir,
+        _type2_dim_company_table_decl(with_valid_to=True),
+        _anchor("America/New_York"),
+    )
+
+    def _c001_first_version_key(rows: dict[str, list[object]]) -> object:
+        c001 = [
+            (valid_from, key)
+            for record_id, valid_from, key in zip(
+                rows["id"], rows["valid_from"], rows["valid_from_date_key"]
+            )
+            if record_id == "c001"
+        ]
+        return min(c001, key=lambda pair: pair[0])[1]
+
+    assert _c001_first_version_key(utc_rows) != _c001_first_version_key(ny_rows)
+
+
+def test_scd_window_valid_to_key_null_on_open_version_valid_from_never_null(
+    tmp_path: Path,
+) -> None:
+    """`valid_to_date_key` is NULL exactly on each record's open version;
+    `valid_from_date_key` is never NULL across any row."""
+    emit_dir = _build_scd_window_emit(tmp_path)
+    rows = _compile_and_run(
+        emit_dir, _type2_dim_company_table_decl(with_valid_to=True), _UTC
+    )
+    assert all(key is not None for key in rows["valid_from_date_key"])
+    for valid_to, valid_to_key in zip(rows["valid_to"], rows["valid_to_date_key"]):
+        assert (valid_to is None) == (valid_to_key is None)
+    open_ids = {
+        record_id
+        for record_id, valid_to in zip(rows["id"], rows["valid_to"])
+        if valid_to is None
+    }
+    assert open_ids == {"c001", "c002"}
+
+
+def test_scd_window_same_local_date_versions_share_valid_from_key(
+    tmp_path: Path,
+) -> None:
+    """c001's first two versions land on the same America/New_York local
+    date and share one `valid_from` key; both rows survive (3 total, not
+    deduplicated) and the third (later) version carries a distinct key."""
+    emit_dir = _build_scd_window_emit(tmp_path)
+    rows = _compile_and_run(
+        emit_dir,
+        _type2_dim_company_table_decl(with_valid_to=True),
+        _anchor("America/New_York"),
+    )
+    c001_keys = sorted(
+        key
+        for record_id, key in zip(rows["id"], rows["valid_from_date_key"])
+        if record_id == "c001"
+    )
+    assert len(c001_keys) == 3
+    assert c001_keys[0] == c001_keys[1]
+    assert c001_keys[2] != c001_keys[1]
+
+
+def test_scd_window_bound_key_without_sibling_compiles_and_executes(
+    tmp_path: Path,
+) -> None:
+    """The `valid_to` bound key needn't travel beside a `derived: scd_window
+    {valid_to, ...}` sibling column -- the date needn't be output alongside
+    the key (`valid_from` alone satisfies Scd2NeedsHistory)."""
+    emit_dir = _build_scd_window_emit(tmp_path)
+    table_decl = TableDecl(
+        name="dim_company",
+        role="dim",
+        scd="type2",
+        source=SourceDecl(grain="records", kind="company"),
+        key=["id", "valid_from"],
+        columns=[
+            ColumnDecl(name="id", **{"from": "record_id"}),
+            ColumnDecl(
+                name="valid_from",
+                derived=DerivedSpec(
+                    scd_window=ScdWindowSpec(bound="valid_from", **{"as": "date"})
+                ),
+            ),
+            ColumnDecl(
+                name="valid_to_date_key", date_ref=DateRefSpec(scd_window="valid_to")
+            ),
+        ],
+    )
+    rows = _compile_and_run(emit_dir, table_decl, _UTC)
+    assert "valid_to" not in rows
+    open_ids = {
+        record_id
+        for record_id, key in zip(rows["id"], rows["valid_to_date_key"])
+        if key is None
+    }
+    assert open_ids == {"c001", "c002"}
+
+
+def test_build_column_expr_bound_shape_date_ref_raises_assertion() -> None:
+    """The records-grain builder never sees the bound shape in practice --
+    `DateRefWindowBoundRequiresScd2` refuses it on every non-type-2 table
+    before compile -- so calling it directly asserts, naming the
+    source-column requirement."""
+    col_decl = ColumnDecl(
+        name="valid_from_date_key", date_ref=DateRefSpec(scd_window="valid_from")
+    )
+    table_decl = TableDecl(
+        name="dim_company",
+        role="dim",
+        source=SourceDecl(grain="records", kind="company"),
+        key=["id"],
+        columns=[ColumnDecl(name="id", **{"from": "record_id"}), col_decl],
+    )
+    with pytest.raises(
+        AssertionError, match="date_ref on the records-grain builder reads"
+    ):
+        build_column_expr(col_decl, _UTC, table_decl=table_decl)
+
+
+def test_build_query_specs_scd_window_bound_sql_deterministic(tmp_path: Path) -> None:
+    """Two compiles of the same bound-shape config produce byte-identical
+    SQL."""
+    emit_dir = _build_scd_window_emit(tmp_path)
+    config = DimensionalConfig(
+        tables=[_type2_dim_company_table_decl(with_valid_to=True)]
+    )
+    with open_emit(emit_dir) as emit:
+        first = build_query_specs(
+            emit,
+            config,
+            _UTC,
+            None,
+            notice_sink=discard_notice_sink,
+            base_relations=None,
+            tables=None,
+        )
+        second = build_query_specs(
+            emit,
+            config,
+            _UTC,
+            None,
+            notice_sink=discard_notice_sink,
+            base_relations=None,
+            tables=None,
+        )
+
+    assert [s.sql for s in first] == [s.sql for s in second]
 
 
 # ---------------------------------------------------------------------------

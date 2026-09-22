@@ -154,8 +154,23 @@
 # the sidecar marks it history_tracked, but its class is constant (it holds
 # exactly its genesis row) and the value is therefore identical on every one
 # of a customer's version rows.
+#
+# CALENDAR: dim_date spans the run's three calendar years (2022-01-01 ..
+# 2024-12-31; the tape runs 2022-03-01 .. 2024-12-31 UTC). The two SCD-2 dims
+# key their version windows into it (`date_ref: {scd_window: valid_from |
+# valid_to}`, the bound shape): valid_from_date_key / valid_to_date_key sit
+# beside the TIMESTAMP bounds, valid_to_date_key NULL on the current row, so
+# "how many customers changed tier in a month" reads off the calendar by key
+# without giving up the instant-grained point-in-time join above. Both facts
+# carry occurred_date_key beside occurred_at for the same reason. birth_date
+# is NOT keyed: it is decades before the range, and a key outside dim_date is
+# a refusal (DateRefOutOfRange), not a NULL — compare it as a DATE.
 
 mode: dimensional
+
+date_dimension:
+  from: "2022-01-01"
+  to: "2024-12-31"
 
 # Every population presents as its registry-declared prefixed presentation key
 # (see the KEYS decision above).
@@ -222,9 +237,15 @@ dimensional:
         - {name: street_address, from: prop__street_address}
         - {name: valid_from, derived: {scd_window: valid_from},
            description: "When this version row became current."}
+        - {name: valid_from_date_key, date_ref: {scd_window: valid_from},
+           description: "dim_date.date_key of the day this version row became
+             current."}
         - {name: valid_to, derived: {scd_window: valid_to},
            description: "When this version row stopped being current; NULL on
              the customer's current row."}
+        - {name: valid_to_date_key, date_ref: {scd_window: valid_to},
+           description: "dim_date.date_key of the day this version row stopped
+             being current; NULL on the customer's current row."}
 
     # --- dim: ops_agent (the storefront monitor bot) — Type-1, one row.
     #     The actor kind's other sub-type; projects exactly the ops partition of
@@ -310,9 +331,15 @@ dimensional:
              near zero while healthy, elevated during incidents."}
         - {name: valid_from, derived: {scd_window: valid_from},
            description: "When this version row became current."}
+        - {name: valid_from_date_key, date_ref: {scd_window: valid_from},
+           description: "dim_date.date_key of the day this version row became
+             current."}
         - {name: valid_to, derived: {scd_window: valid_to},
            description: "When this version row stopped being current; NULL on
              the current row."}
+        - {name: valid_to_date_key, date_ref: {scd_window: valid_to},
+           description: "dim_date.date_key of the day this version row stopped
+             being current; NULL on the current row."}
 
     # --- dim: session — Type-1, shopping sessions only (see SEPARATE).
     #     Only what does NOT version about a session; its state-machine timeline
@@ -377,6 +404,8 @@ dimensional:
         # SCD-2 dims' valid_from/valid_to windows
         - {name: occurred_at, derived: {timestamp: {source: created_sim_time}},
            description: "When the action happened."}
+        - {name: occurred_date_key, date_ref: {source: created_sim_time},
+           description: "dim_date.date_key of the day the action happened."}
 
     # --- fact: action_product (the binding bridge) — grain: one binding,
     #     product roles only (see SEPARATE). Single-pick roles contribute one
@@ -420,5 +449,8 @@ dimensional:
              product_comparison; 0 for views and cart adds."}
         - {name: occurred_at, derived: {timestamp: {source: joined_sim_time}},
            description: "When the action touched the product."}
+        - {name: occurred_date_key, date_ref: {source: joined_sim_time},
+           description: "dim_date.date_key of the day the action touched the
+             product."}
         # left_sim_time is not projected: no product binding is ever released
         # within the run, so the column is empty on every row.

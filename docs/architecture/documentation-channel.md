@@ -238,20 +238,22 @@ the table whose report carries a `calendar` provenance; each column doc
 resolves with `origin: "forge"`, no unit, no enum options. `dim_date` is not
 a declared table, so `author_descriptions` cannot exist there.
 
-A `date_ref` column is an ordinary declared column with provenance to its
-source column, but it is a key, not a carried value, so it does not inherit:
+A `date_ref` column is an ordinary declared column — with provenance to its
+source column in the instant and parse shapes, with none in the bound shape
+(a version bound is computed, not carried) — but it is a key, not a carried
+value, so it does not inherit:
 
 | Tier | Source |
 |---|---|
 | 1 | The author's `description` on the column entry |
-| 2 | The pinned `date_ref` prose — "Calendar key (`yyyymmdd`) into `dim_date`, derived from `<source column>`", the source column read from the report's provenance entry, keyed off `references[column] == "dim_date"` |
+| 2 | The pinned `date_ref` prose, keyed off `references[column] == "dim_date"`. With a `window_bounds` entry on the report (the bound shape): "Calendar key (`yyyymmdd`) into `dim_date`, derived from this version's `<bound>` bound", `<bound>` that entry. Otherwise: "Calendar key (`yyyymmdd`) into `dim_date`, derived from `<source column>`", the source column read from the report's provenance entry. The branch reads whichever of `window_bounds` / `provenance` is present, never both ([`date-dimension.md`](date-dimension.md) § Invariants) |
 
 Never inheritance: the pinned entry always answers when no override exists, so
 the source column's own description is not carried onto a key column even
-though the column carries provenance to it. The prose names neither the shape
-nor the parse format — the report carries only the source column and the
-reference, and the dictionary resolves from the report alone; shape and format
-are on record in the embedded config. `unit` is `None` on **both** tiers — a
+though the column may carry provenance to it. The prose names neither the
+instant/parse shape nor the parse format — the report carries only the source
+column (or the bound) and the reference, and the dictionary resolves from the
+report alone; shape and format are on record in the embedded config. `unit` is `None` on **both** tiers — a
 key carries no unit — a rule the dictionary applies to any column with
 `references[column] == "dim_date"`, distinct from the unit-stop: that stop
 drops a carried `ns` unit only when the output type has left the integer
@@ -353,7 +355,8 @@ uncommenting keeps the documentation.
    author's prose is the column's or table's description; with none,
    documentation resolves from exactly one source — the forge-pinned
    event-log set for the marked table, the forge-pinned calendar set for
-   `dim_date` and for an undescribed `date_ref` column, the vendored contract strings for
+   `dim_date` and for an undescribed `date_ref` column (source-column or
+   bound variant, by the report's `provenance` / `window_bounds`), the vendored contract strings for
    structural columns, the sidecar for per-run columns and single-source
    tables. Never a blend, no
    fallback across authorities, no inference from names, types, or rows.
@@ -363,7 +366,7 @@ uncommenting keeps the documentation.
 3. **Sourced, never invented.** Every rendered documentation string traces
    to the sidecar, the vendored contract, a forge-pinned dictionary
    constant (the event-log table + column set; the calendar table + column
-   set and the `date_ref` key description; the interval-end
+   set and the two `date_ref` key descriptions; the interval-end
    description; the four export rewrites of
    base-pointing contract strings), or the author's export config — the
    same standing `readme_overlay` has on its surface. The only transformations are

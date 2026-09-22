@@ -171,6 +171,13 @@ _DATE_REF_DESCRIPTION_TEMPLATE = (
 `{source}` the report's provenance `source_column` for the column, the same
 for both the instant and parse shapes."""
 
+_DATE_REF_WINDOW_BOUND_DESCRIPTION_TEMPLATE = (
+    "Calendar key (`yyyymmdd`) into `dim_date`, derived from this version's"
+    " `{bound}` bound"
+)
+"""A bound-shape `date_ref` column's pinned description, absent an author
+override — `{bound}` the report's `window_bounds` entry for the column."""
+
 #: Export-facing rewrites of the pinned structural strings whose prose
 #: points at base-layer structure a shaped export does not contain — a
 #: `records__<kind>` table to equality-join, the `membership__<K>__<p>`
@@ -329,10 +336,14 @@ def resolve_column_doc(
         column named in the pinned calendar set resolves the same way. On a
         column whose `references` entry is `dim_date`: with an
         `author_descriptions` entry, the author's description at origin
-        "author"; without one, the pinned `date_ref` prose naming the
-        column's provenance source, at origin "forge" — either way `unit`
-        is None (a key carries no unit) and the source column's own doc is
-        never inherited. Otherwise, with an `author_descriptions` entry for
+        "author"; without one, at origin "forge", the pinned bound-shape
+        prose naming `table.window_bounds[column_name]` when the column has
+        a `window_bounds` entry, else the pinned `date_ref` prose naming the
+        column's provenance source column — either way `unit` is None (a
+        key carries no unit) and the source column's own doc is never
+        inherited; the branch reads whichever of `window_bounds` /
+        `provenance` is present and never both. Otherwise, with an
+        `author_descriptions` entry for
         the column: the resolved doc with the author's description and
         origin "author" — on a carried column the inherited unit rides
         along under today's unit rules; on a column with no carried
@@ -358,6 +369,15 @@ def resolve_column_doc(
         date_ref_override = table.author_descriptions.get(column_name)
         if date_ref_override is not None:
             return ColumnDoc(description=date_ref_override, unit=None, origin="author")
+        bound = table.window_bounds.get(column_name)
+        if bound is not None:
+            return ColumnDoc(
+                description=_DATE_REF_WINDOW_BOUND_DESCRIPTION_TEMPLATE.format(
+                    bound=bound
+                ),
+                unit=None,
+                origin="forge",
+            )
         source_column = table.provenance[column_name].source_column
         return ColumnDoc(
             description=_DATE_REF_DESCRIPTION_TEMPLATE.format(source=source_column),

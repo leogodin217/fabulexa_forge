@@ -173,6 +173,74 @@ def test_date_ref_spec_unknown_directive_refused_by_declared_parse_rules() -> No
         DateRefSpec.model_validate({"from": "dob_text", "format": "%Y-%m-%Z"})
 
 
+def test_date_ref_spec_neither_shape_message_lists_scd_window() -> None:
+    """The neither-shape refusal message names all three shapes, `scd_window`
+    included."""
+    with pytest.raises(ValidationError, match=r"'source' / 'from' / 'scd_window'"):
+        DateRefSpec.model_validate({})
+
+
+# ---------------------------------------------------------------------------
+# DateRefSpec: bound shape (`scd_window`)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("bound", ["valid_from", "valid_to"])
+def test_date_ref_spec_bound_shape_accepted(bound: str) -> None:
+    """`{scd_window: valid_from}` / `{scd_window: valid_to}` alone is
+    accepted; `source`, `from_`, `format` all stay None."""
+    spec = DateRefSpec.model_validate({"scd_window": bound})
+    assert spec.scd_window == bound
+    assert spec.source is None
+    assert spec.from_ is None
+    assert spec.format is None
+
+
+def test_date_ref_spec_bound_shape_beside_source_refused() -> None:
+    """`scd_window` beside `source` is refused."""
+    with pytest.raises(ValidationError, match="exactly one of"):
+        DateRefSpec.model_validate({"source": "sim_time", "scd_window": "valid_from"})
+
+
+def test_date_ref_spec_bound_shape_beside_parse_shape_refused() -> None:
+    """`scd_window` beside `from` + `format` is refused."""
+    with pytest.raises(ValidationError, match="exactly one of"):
+        DateRefSpec.model_validate(
+            {"from": "dob_text", "format": "%Y-%m-%d", "scd_window": "valid_to"}
+        )
+
+
+def test_date_ref_spec_all_three_shapes_refused() -> None:
+    """`source`, `from` + `format`, and `scd_window` all set at once is
+    refused, the message naming all three values."""
+    with pytest.raises(
+        ValidationError,
+        match=r"got source='sim_time', from='dob_text', scd_window='valid_from'",
+    ):
+        DateRefSpec.model_validate(
+            {
+                "source": "sim_time",
+                "from": "dob_text",
+                "format": "%Y-%m-%d",
+                "scd_window": "valid_from",
+            }
+        )
+
+
+def test_date_ref_spec_bound_shape_outside_literal_refused_as_type_error() -> None:
+    """`scd_window: "as_of"` (outside the two-literal set) is a Pydantic type
+    refusal, not the `exactly_one_shape` validator."""
+    with pytest.raises(ValidationError, match="valid_from.*valid_to"):
+        DateRefSpec.model_validate({"scd_window": "as_of"})
+
+
+def test_date_ref_spec_bound_shape_with_format_and_no_from_refused() -> None:
+    """`scd_window` with `format` set and no `from` is refused by the
+    format-iff-from rule, not the shape-count rule."""
+    with pytest.raises(ValidationError, match="format is required iff 'from'"):
+        DateRefSpec.model_validate({"scd_window": "valid_from", "format": "%Y-%m-%d"})
+
+
 # ---------------------------------------------------------------------------
 # ColumnDecl.date_ref
 # ---------------------------------------------------------------------------
@@ -209,6 +277,32 @@ def test_column_decl_date_ref_and_derived_refused() -> None:
                 "name": "visit_date_key",
                 "derived": {"ordinal": {"partition_by": "id", "order_by": "id"}},
                 "date_ref": {"source": "sim_time"},
+            }
+        )
+
+
+def test_column_decl_date_ref_bound_shape_alone_accepted() -> None:
+    """`date_ref: {scd_window: valid_from}` alone is a valid column mode."""
+    col = ColumnDecl.model_validate(
+        {"name": "valid_from_date_key", "date_ref": {"scd_window": "valid_from"}}
+    )
+    assert col.date_ref is not None
+    assert col.date_ref.scd_window == "valid_from"
+
+
+def test_column_decl_date_ref_bound_shape_and_from_refused_with_seven_mode_message() -> (
+    None
+):
+    """`date_ref` (bound shape) + `from` is refused; the one-mode refusal
+    fires the same way for the bound shape as for the instant shape."""
+    with pytest.raises(
+        ValidationError, match=r"from/fk/correlation/derived/null/lookup/date_ref"
+    ):
+        ColumnDecl.model_validate(
+            {
+                "name": "valid_from_date_key",
+                "from": "record_id",
+                "date_ref": {"scd_window": "valid_from"},
             }
         )
 
@@ -332,6 +426,33 @@ def test_export_config_date_dimension_block_with_no_date_ref_anywhere_accepted()
     )
     assert cfg.date_dimension is not None
     assert cfg.date_dimension.from_ == date(2024, 1, 1)
+
+
+def test_export_config_date_ref_bound_shape_without_block_refused() -> None:
+    """`date_refs_require_date_dimension` fires for the bound shape exactly
+    as it does for the instant shape -- it is shape-blind."""
+    dimensional = {
+        "tables": [
+            {
+                "name": "dim_company",
+                "role": "dim",
+                "scd": "type2",
+                "source": {"grain": "records", "kind": "company"},
+                "key": ["id"],
+                "columns": [
+                    {"name": "id", "from": "record_id"},
+                    {
+                        "name": "valid_from_date_key",
+                        "date_ref": {"scd_window": "valid_from"},
+                    },
+                ],
+            }
+        ]
+    }
+    with pytest.raises(
+        ValidationError, match="table 'dim_company' column 'valid_from_date_key'"
+    ):
+        ExportConfig.model_validate({"mode": "dimensional", "dimensional": dimensional})
 
 
 def test_export_config_date_dimension_and_date_ref_together_accepted() -> None:

@@ -89,8 +89,21 @@
 #
 # Timestamps: no `rebase:` block — the anchor is the sidecar runtime
 # (2026-01-05T08:00:00 UTC). occurred_at is a wallclock TIMESTAMP.
+#
+# Calendar: dim_date spans the corpus's four months (2026-01-01 ..
+# 2026-04-30; the 90-day tape runs 2026-01-05 .. 2026-04-05 UTC). dim_server keys its
+# version windows into it (`date_ref: {scd_window: valid_from | valid_to}`,
+# the bound shape): valid_from_date_key / valid_to_date_key beside the
+# TIMESTAMP bounds, valid_to_date_key NULL on the current version — the
+# mail_maintenance port window is then a pair of calendar keys. The fact
+# carries occurred_date_key beside occurred_at, so per-day event counts
+# read off the calendar by key.
 
 mode: dimensional
+
+date_dimension:
+  from: "2026-01-01"
+  to: "2026-04-30"
 
 keys:
   actor: record_index
@@ -146,11 +159,21 @@ dimensional:
         - name: valid_from
           derived: {scd_window: valid_from}
           description: Time this version of the server row became current.
+        - name: valid_from_date_key
+          date_ref: {scd_window: valid_from}
+          description: >-
+            dim_date.date_key of the day this version of the server row
+            became current.
         - name: valid_to
           derived: {scd_window: valid_to}
           description: >-
             Time this version stopped being current; NULL on the current
             version.
+        - name: valid_to_date_key
+          date_ref: {scd_window: valid_to}
+          description: >-
+            dim_date.date_key of the day this version stopped being current;
+            NULL on the current version.
 
     # --- dim: account — the credential principals the auth log reports on ---
     - name: dim_account
@@ -218,6 +241,9 @@ dimensional:
         - name: occurred_at
           derived: {timestamp: {source: created_sim_time}}
           description: Time the event was logged.
+        - name: occurred_date_key
+          date_ref: {source: created_sim_time}
+          description: dim_date.date_key of the day the event was logged.
         - name: event_type
           derived:
             value_map:

@@ -91,6 +91,7 @@ def _two_table_report(*, row_count: int | None) -> ExportReport:
                 supplement=None,
                 calendar=None,
                 references={},
+                window_bounds={},
             ),
             TableReport(
                 name="visits",
@@ -105,6 +106,7 @@ def _two_table_report(*, row_count: int | None) -> ExportReport:
                 supplement=None,
                 calendar=None,
                 references={},
+                window_bounds={},
             ),
         )
     )
@@ -621,6 +623,7 @@ def test_event_log_marker_wins_over_single_source_provenance_forward(
         supplement=None,
         calendar=None,
         references={},
+        window_bounds={},
     )
     text = _render_report(tmp_path, report)
     section = text[text.index("### audit_log") :]
@@ -646,6 +649,7 @@ def test_column_outside_pinned_set_resolves_normally_on_marked_report(
         supplement=None,
         calendar=None,
         references={},
+        window_bounds={},
     )
     text = _render_report(tmp_path, report)
     section = text[text.index("### audit_log") :]
@@ -671,6 +675,7 @@ def test_unmarked_report_never_consults_pinned_event_log_set(tmp_path: Path) -> 
         supplement=None,
         calendar=None,
         references={},
+        window_bounds={},
     )
     text = _render_report(tmp_path, report)
     assert (
@@ -747,6 +752,7 @@ def test_override_on_computed_column_with_no_provenance_renders_description_only
         supplement=None,
         calendar=None,
         references={},
+        window_bounds={},
     )
     text = _render_report(tmp_path, report)
     assert (

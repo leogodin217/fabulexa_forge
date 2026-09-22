@@ -307,6 +307,7 @@ def documented_actor_table_report(
         supplement=None,
         calendar=None,
         references={},
+        window_bounds={},
     )
 
 
@@ -363,6 +364,7 @@ def event_log_table_report(
         supplement=None,
         calendar=None,
         references={},
+        window_bounds={},
     )
 
 
@@ -406,6 +408,7 @@ def history_interval_table_report(
         supplement=None,
         calendar=None,
         references={},
+        window_bounds={},
     )
 
 
@@ -445,6 +448,7 @@ def value_mapped_table_report(
         supplement=None,
         calendar=None,
         references={},
+        window_bounds={},
     )
 
 
@@ -495,4 +499,5 @@ def structural_identity_table_report(
         supplement=None,
         calendar=None,
         references={},
+        window_bounds={},
     )
