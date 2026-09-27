@@ -25,7 +25,7 @@ The contract is **two artifacts per emit**, not a Python package:
 | `run.duckdb` | DuckDB's own format | DuckDB (any version supporting the schema written) |
 | `base.json` | `base-format.schema.json` (sibling of this doc) | Any reader of any kind |
 
-**`BASE_FORMAT_VERSION = 11`** — lives in the sidecar JSON, not in any Python package. No code imports needed to learn the version.
+**`BASE_FORMAT_VERSION = 12`** — lives in the sidecar JSON, not in any Python package. No code imports needed to learn the version.
 
 ---
 
@@ -123,7 +123,7 @@ Where P is the count of *scalar* declared properties for kind *K* and R is the c
 
 **`created_sim_time` is the record's immutable creation time.** Position 3 carries the `sim_time` at which the record was created and is set exactly once. It is unaffected by every later content event — a property write and a deactivation both leave it unchanged — and is non-NULL on every row, including write-once fact records (`history_tracked: false`). Consumers MAY use it to bound a record's lifetime from below.
 
-**`last_mutation_sim_time` bounds every content change to its record.** Position 6 advances on *every* content event for the record — creation, each property write, and deactivation. A deactivation flip is a content change, **not** exempt: a record whose only post-creation event is deactivation carries `last_mutation_sim_time == deactivated_at`. Producers MUST uphold this so consumers MAY treat the column as a high-water mark over the record's whole lifecycle, deactivation included. This is binding at `base_format_version: 11`.
+**`last_mutation_sim_time` bounds every content change to its record.** Position 6 advances on *every* content event for the record — creation, each property write, and deactivation. A deactivation flip is a content change, **not** exempt: a record whose only post-creation event is deactivation carries `last_mutation_sim_time == deactivated_at`. Producers MUST uphold this so consumers MAY treat the column as a high-water mark over the record's whole lifecycle, deactivation included. This is binding at `base_format_version: 12`.
 
 **Row order.** Creation order within kind, lexicographic on kind across kinds — the order in which the producer created each record, preserved by insertion-order iteration. A kind whose records are created through more than one id-minting path (e.g. sequential integer-string ids and hex-digest ids on the same kind) yields rows interleaved by creation time, **not** sorted by `record_id` value. Consumers MUST NOT rely on any sort derived from `record_id` — ids minted by different paths are structurally disjoint, and lexicographic order over the mixed set carries no semantic meaning.
 
@@ -344,7 +344,7 @@ The sidecar's JSON Schema is `base-format.schema.json`, beside this doc. Conform
 
 ```json
 {
-  "base_format_version": 11,
+  "base_format_version": 12,
   "surface": "published",
   "scenario_description": "A regional hospital network's inpatient/outpatient flow.",
   "scenario_name": "Regional Hospital Network",
@@ -384,7 +384,7 @@ The sidecar's JSON Schema is `base-format.schema.json`, beside this doc. Conform
 
 | Field | Type | Required | Meaning |
 |---|---|---|---|
-| `base_format_version` | integer | yes | Format version. Current value: `11`. |
+| `base_format_version` | integer | yes | Format version. Current value: `12`. |
 | `surface` | string | yes | Positive discriminator naming what this emit is. Always `"published"` in an emit conformant with this document. See § The `surface` field. |
 | `scenario_description` | string | optional | The scenario's declared narrative, forwarded verbatim from the source emit. Present only when the source scenario declared one; omitted entirely otherwise. See § Scenario narrative. |
 | `scenario_name` | string | optional | The scenario's declared display label, forwarded verbatim from the source emit. Present only when the source scenario declared one; omitted entirely otherwise. See § Scenario narrative. |
@@ -422,7 +422,7 @@ The sidecar's JSON Schema is `base-format.schema.json`, beside this doc. Conform
 | `row_census` | object | optional | Row counts describing the rows of the file this sidecar sits in, keyed by `fork_path` — one key, matching the single `branches[]` entry. Keys sorted lexicographically at every nesting level. Advisory: no conformance check ranges over its contents. See § The `row_census` block. |
 | `tables[].rows` | integer | yes | Row count of the table. |
 
-The fields above are the *required* shape at `base_format_version: 11`. Producers MAY add other top-level fields (cross-emit linkage, pin-identity surfaces, producer hints) as optional extensions; a reader encountering unknown fields under a `base_format_version: 11` sidecar MAY warn but MUST NOT fail. See § Format versioning for which additions are version-compatible vs. require a bumped version.
+The fields above are the *required* shape at `base_format_version: 12`. Producers MAY add other top-level fields (cross-emit linkage, pin-identity surfaces, producer hints) as optional extensions; a reader encountering unknown fields under a `base_format_version: 12` sidecar MAY warn but MUST NOT fail. See § Format versioning for which additions are version-compatible vs. require a bumped version.
 
 ### The `surface` field
 
@@ -579,7 +579,7 @@ actor sub-types, never narrowed to those surviving a slice — this is what keep
 the block slice-stable.
 
 Adding `record_roles` is a version-compatible extension at
-`base_format_version: 11`: it is an optional top-level field a reader that does
+`base_format_version: 12`: it is an optional top-level field a reader that does
 not recognize it ignores (unknown top-level fields MAY warn but MUST NOT fail).
 A generic exporter branches on `record_roles` with no hard-coded kind→role map.
 
@@ -691,7 +691,7 @@ exactly this one column. C14 references this carve-out.
 The declared partition and the kind's structural properties are both fixed at
 run initialization and persisted with the run, so every emit derived from the
 same persisted run carries the same per-kind entry across `slice_at` choices. Adding `sub_type_columns` is a version-compatible
-extension at `base_format_version: 11`: an optional top-level field a reader
+extension at `base_format_version: 12`: an optional top-level field a reader
 that does not recognize it ignores (unknown top-level fields MAY warn but MUST
 NOT fail). Consumers gate on presence and fall back to union-schema behavior
 when absent.
@@ -753,7 +753,7 @@ semantics) — its identity-column analogue is the key declaration
 `tracked` — it is re-minted at each change instant of its source, and those mints
 are appended to the `history` table.
 
-**Coverage.** A `base_format_version: 11` emit carries both attributes on every
+**Coverage.** A `base_format_version: 12` emit carries both attributes on every
 records-category `prop__<name>` column, and on every presentation-property column.
 
 **All-or-none across an emit's `prop__` columns.** A producer that emits column
@@ -767,7 +767,7 @@ emit derived from the same persisted run carries the same pair for a given colum
 across `slice_at` choices — matching how `enum_domains` and `pinned_ids` are
 run-level.
 
-**Reader contract.** A reader gating on `base_format_version: 11` reads
+**Reader contract.** A reader gating on `base_format_version: 12` reads
 `temporal_class` directly. On a v4 emit the attribute is **absent and the class is
 unknown**; the reader falls back to `history_tracked` inference and inherits its
 false-negative tail — and cannot distinguish `constant` from `slice_only` at all,
@@ -1341,7 +1341,7 @@ A reference Python conformance check, `check_published_conformance.py`, ships in
 |---|---|---|
 | `base_format_version` | `base.json` | Required tables change, fixed-table column lists change, sidecar schema changes |
 
-**Current version = 11.** This document defines v11. A version bump implies one of:
+**Current version = 12.** This document defines v12. A version bump implies one of:
 - The required-tables set changed (added/removed/renamed tables)
 - A fixed-table required-column list changed
 - The sidecar schema gained a new *required* top-level field
@@ -1355,6 +1355,8 @@ The `2 → 3` bump is forced by the `membership` table category: a new table cat
 The `3 → 4` bump is forced by the `created_sim_time` lifecycle column inserted at position 3 of the fixed prefix of every `records__<kind>` table: a records-prefix column-list change that shifts `active`, `deactivated_at`, `last_mutation_sim_time`, and the entire `prop__` block down one position, plus the amended C5 (the lifecycle prefix is now four columns) — a v3 reader keying on the prior positions cannot interpret a v4 table correctly.
 
 The `10 → 11` bump carries the `eligible` slot appended to the `queue.waiters` element struct (`elem__eligible`, nullable VARCHAR: the comma-separated server ids a queued waiter may be promoted onto; NULL = any server on its queue). A reader pairing waiter intervals to holder intervals by element position, or validating the waiters element list against v10's six fields, would misread a v11 table.
+
+The `11 → 12` bump is forced by a grammar change to an existing column's value: `records__waiter.prop__priority_source` carries a conditions path (`actor.acuity`) where v11 stored a bare property name (`acuity`) — the sourced-priority `from:` form is one path grammar across every consumer, and a v11 reader splitting the value as a property name misreads a v12 cell. The `membership__actor__presence` table (the TICK presence slot: one `(elem__claim, elem__priority, elem__status)` interval per claim or wait on an actor, no reference field) ships under the same bump as a new membership-category table and would alone have been version-compatible.
 
 Adding a *new optional* column group is **not** a version bump as long as prior-version readers continue to read prior-version sidecars correctly — column presence is already self-describing.
 
