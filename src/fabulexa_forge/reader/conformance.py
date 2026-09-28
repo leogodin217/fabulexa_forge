@@ -1508,12 +1508,17 @@ def _check_c12_actor_subtypes(
     messages: list[str],
     skips: list[str],
 ) -> None:
-    """Check actor sub-type coverage for C12.
+    """Check the two actor sub-type clauses of C12.
 
-    Every distinct prop__actor_type value in records__actor must be declared in
-    record_roles["actor"]. records__actor absent from the catalog is a skip
-    (C2 owns catalog disagreement); absent from the sidecar is handled by the
-    kind-coverage loop in _check_c12.
+    Declared equality: when enum_domains carries an "actor_type" entry,
+    record_roles["actor"]'s keys must equal that entry's declared values exactly
+    — the two registries name the same actor sub-types. Sidecar-only, so it runs
+    whether or not records__actor is in the catalog.
+
+    Observed coverage: every distinct prop__actor_type value in records__actor
+    must be declared in record_roles["actor"]. records__actor absent from the
+    catalog is a skip (C2 owns catalog disagreement); absent from the sidecar is
+    handled by the kind-coverage loop in _check_c12.
 
     Args:
         emit: An open emit.
@@ -1524,6 +1529,16 @@ def _check_c12_actor_subtypes(
     """
     if not record_roles.is_subtyped("actor"):
         return
+
+    actor_domain = emit.sidecar.enum_domains().get("actor", {})
+    if "actor_type" in actor_domain:
+        declared = set(actor_domain["actor_type"])
+        registered = set(record_roles.sub_types("actor"))
+        if registered != declared:
+            messages.append(
+                f"C12: record_roles['actor'] sub-types {sorted(registered)!r} do "
+                f"not match the declared 'actor_type' domain {sorted(declared)!r}"
+            )
 
     actor_table = "records__actor"
     if actor_table not in catalog_tables:
@@ -1567,6 +1582,8 @@ def _check_c12(emit: "Emit") -> CheckResult:
     - Every non-actor kind maps to a value in {"dimension", "fact"}.
     - record_roles["actor"] is an object (is_subtyped) and every value in it
       is in {"dimension", "fact"}.
+    - record_roles["actor"]'s keys equal the declared "actor_type" domain in
+      enum_domains exactly, when that entry is present.
     - Every distinct prop__actor_type value in records__actor data is declared
       in record_roles["actor"].
 
@@ -1620,7 +1637,8 @@ def _check_c12(emit: "Emit") -> CheckResult:
                     f"is not a valid role (must be 'dimension' or 'fact')"
                 )
 
-    # Actor sub-type coverage: every prop__actor_type value in data must be declared
+    # Actor sub-types: declared equality against enum_domains, plus coverage of
+    # every prop__actor_type value in data
     if "actor" in registered_kinds:
         _check_c12_actor_subtypes(emit, record_roles, catalog_tables, messages, skips)
 

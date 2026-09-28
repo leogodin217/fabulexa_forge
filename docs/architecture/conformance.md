@@ -181,7 +181,7 @@ direct validation of the unmodified schema and drops step 1.
 | C9 | If `pinned_ids` present: each `(kind,label,id)` resolves to exactly one row per `(id × fork_path present in that table)` | exhaustive over `pinned_ids`; per-branch quantifier. An absent `records__<kind>` for a pinned kind is a C9 *failure* — a pin must resolve |
 | C10 | Membership integrity | `left_sim_time IS NULL OR left_sim_time >= joined_sim_time`; each non-NULL member reference resolves to **some** row in `records__<member_kind>` on the same `fork_path`, by identity (regardless of `active`) |
 | C11 | `history_tracked` validity, **bidirectional** (semantic check, classed with C6/C7/C10) | Forward clause: for each distinct `(kind, property)` pair in `history`, the `prop__<property>` column on `records__<kind>` must carry `history_tracked == true` in the sidecar. Converse clause: for each `records__<kind>` with at least one row, each `prop__` column flagged `history_tracked: true` has at least one `history` row for `(kind, property)` — zero rows violates the unconditional creation seed (see [`bundle.md`](bundle.md) § Column temporal classes). The converse consults only flagged columns whose declared type is round-trippable (`{BIGINT, DOUBLE, BOOLEAN, VARCHAR}`, the same gate C6 uses — collection-struct properties emit membership tables, not `history` rows); the forward clause needs no gate. Skips when no records-category `prop__` column carries `history_tracked`; iterates in sorted order for deterministic messages |
-| C12 | Record-role registry consistency (semantic check, classed with C6/C7/C9/C10/C11) | every emitted records-category kind appears in `record_roles`; every role value is in `{"dimension","fact"}`; every distinct `prop__actor_type` in `records__actor` data is declared in `record_roles["actor"]`. Coverage, not exactness — the `actor` object MAY declare unused sub-types. Skips when `record_roles` is absent (below) |
+| C12 | Record-role registry consistency (semantic check, classed with C6/C7/C9/C10/C11) | every emitted records-category kind appears in `record_roles`; every role value is in `{"dimension","fact"}`; `record_roles["actor"]`'s keys equal the declared `actor_type` domain in `enum_domains` exactly, when that entry is present; every distinct `prop__actor_type` in `records__actor` data is declared in `record_roles["actor"]` — coverage against data, since the `actor` object MAY declare sub-types absent from the slice. Skips when `record_roles` is absent (below) |
 | C13 | Temporal-class consistency: the attribute pairing, the enum, the implications, and the genesis row (below) | Structural clauses over every records-category `prop__` column: `history_tracked` present **iff** `temporal_class` present; a present class is one of the three declared values; `tracked` implies flag `true`; `slice_only` implies flag `false`. Semantic clause: every flagged property of every record has its genesis `history` row at that record's own `created_sim_time` — **exhaustive** where the published procedure samples up to ten records. Skips on the same guard as C11 |
 | C14 | Sub-type column partition consistency (semantic check, classed with C6/C7/C9–C13) | **Sidecar-only, no data query.** Skips when `sub_type_columns` is absent; a present `sub_type_columns` with `enum_domains` absent is a *failure*, not a skip (the `<kind>_type` domain defines the partitioned-kind set). Asserts: the partition's kinds are exactly the records kinds carrying a `<kind>_type` discriminator in `enum_domains`; per kind, the sub-type keys equal that declared domain; per kind, the union of the per-sub-type lists equals the value columns (those carrying the temporal pair) minus `prop__<kind>_type`, plus `presentation_id` when `records__<kind>` carries that column, plus each reference-typed value column's `ref_index__` sibling; per sub-type, a reference column and its `ref_index__` sibling are listed together or not at all. The discriminator carries the temporal pair yet is excluded by the carve-out; `presentation_id` carries neither and is admitted by column presence alone — the union clause requires only attribution to *some* sub-type, never which one |
 | C15 | Surface consistency: the sidecar's `surface` discriminator is `"published"` and neither a `projection` block nor a top-level `rule_docs` block is present | **Sidecar-only, no data query.** Never skips. The other invariants of a published emit (no `firings` table, no machinery kinds, no provenance column group) are owned by C3, C12, and C5; C15 checks only what those do not — the discriminator itself and the paired `projection` / `rule_docs` absences (the latter's anchors, `firings` and the machinery tables, are stripped surfaces) |
@@ -231,7 +231,7 @@ prevent, not forge's to detect. Forge checks name, type, and position.
 
 C12 skips — recording the skip and passing by vacuity — when the sidecar omits
 `record_roles` (an emit predating the additive registry). When present it asserts
-three things against the sidecar and `records__actor` data:
+four things against the sidecar and `records__actor` data:
 
 - **Kind coverage.** Every emitted records-category kind — any kind with a
   `category == "records"` table declared in the sidecar, `actor` included — must
@@ -241,9 +241,15 @@ three things against the sidecar and `records__actor` data:
 - **Role validity.** Every non-`actor` value is in `{"dimension", "fact"}`;
   `record_roles["actor"]`, when present, is an object whose every value is in that
   set.
+- **Actor sub-type declared equality.** When `enum_domains` carries an
+  `actor_type` entry, `record_roles["actor"]`'s keys equal that entry's declared
+  values exactly — the two registries name the same actor sub-types. Sidecar-only,
+  so it runs whether or not `records__actor` reaches the catalog, and it is the only
+  clause that can see a declared sub-type no row exhibits.
 - **Actor sub-type coverage.** Every distinct `prop__actor_type` value present in
-  `records__actor` data is declared in `record_roles["actor"]`. This is coverage, not
-  exactness: the object MAY declare sub-types absent from a given slice's data.
+  `records__actor` data is declared in `record_roles["actor"]`. Against *data* this
+  is coverage, not exactness: the object MAY declare sub-types absent from a given
+  slice's data. Exactness is owed to the declared domain above, not to the slice.
 
 Membership tables need no separate clause — every membership kind also has a records
 table, so role coverage is transitive through the records loop. C12 follows the
@@ -311,7 +317,7 @@ ambiguity of "matches the spec". The five sources:
 | C9 | SC `pinned_ids` | DB-data records rows | one row per `(id × branch)`; absent table for a pinned kind → fail |
 | C10 | DB-data membership | DB-data records existence | reference resolution by identity |
 | C11 | SC `ColumnSpec.history_tracked` | DB-data `history` `(kind, property)` pairs | forward: each pair in `history` is sidecar-flagged; converse: each flagged round-trippable column of a non-empty kind has ≥ 1 `history` row; skip when no records `prop__` column carries the flag |
-| C12 | SC `record_roles` + SC `category == "records"` kinds | DB-data distinct `records__actor.prop__actor_type` | kind coverage; role values in `{"dimension","fact"}`; actor sub-type coverage; skip when `record_roles` absent |
+| C12 | SC `record_roles` + SC `category == "records"` kinds + SC `enum_domains` | DB-data distinct `records__actor.prop__actor_type` | kind coverage; role values in `{"dimension","fact"}`; actor sub-type equality against the declared `actor_type` domain; actor sub-type coverage over data; skip when `record_roles` absent |
 | C13 | SC `ColumnSpec.{history_tracked, temporal_class}` | the contract's pairing/enum/implication clauses; DB-data `history` genesis rows vs `records__<kind>.created_sim_time` | pairing iff; enum; implications; a genesis row per `(kind, record_id, property)`, exhaustive over records; skip on C11's guard |
 
 **C4/C5 read the sidecar, not the catalog.** They check that `base.json`'s declared

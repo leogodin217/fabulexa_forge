@@ -1375,6 +1375,32 @@ def build_c12_missing_subtype(dest: Path) -> None:
     write_emit(dest, tables=tables, branches=_SPANNING_BRANCHES, extra=extra)
 
 
+def build_c12_subtype_domain_mismatch(dest: Path) -> None:
+    """Build the c12_subtype_domain_mismatch fixture into dest.
+
+    enum_domains["actor"]["actor_type"] declares an 'orderly' sub-type that
+    record_roles["actor"] omits, and no records__actor row carries it. C12 fails
+    on the declared-equality clause alone: the observed-coverage loop cannot see
+    a sub-type that no row exhibits, so this fixture isolates the clause that
+    holds the two registries to the same actor sub-types.
+    """
+    dest.mkdir(parents=True, exist_ok=True)
+    db_path = dest / "run.duckdb"
+    conn = duckdb.connect(str(db_path))
+    history_rows, actor_rows, doctor_rows, membership_rows = _build_spanning_db(conn)
+    conn.close()
+
+    tables = _spanning_tables(history_rows, actor_rows, doctor_rows, membership_rows)
+    extra = _base_extra(include_record_roles=True)
+    enum_domains = extra["enum_domains"]
+    assert isinstance(enum_domains, dict)
+    actor_domains = enum_domains["actor"]
+    assert isinstance(actor_domains, dict)
+    # 'orderly' is declared here, absent from record_roles["actor"] and from data
+    actor_domains["actor_type"] = enum_options("nurse", "patient", "orderly")
+    write_emit(dest, tables=tables, branches=_SPANNING_BRANCHES, extra=extra)
+
+
 # ---------------------------------------------------------------------------
 # C5 shape negatives — each isolates one clause of the amended
 # _check_c5_table positional check to records__actor alone.
@@ -1492,6 +1518,7 @@ _BUILDERS: dict[str, Callable[[Path], None]] = {
     "refs_dangling": build_refs_dangling,
     "c12_missing_kind": build_c12_missing_kind,
     "c12_missing_subtype": build_c12_missing_subtype,
+    "c12_subtype_domain_mismatch": build_c12_subtype_domain_mismatch,
     "c13_broken_pairing": build_c13_broken_pairing,
     "c13_out_of_enum_class": build_c13_out_of_enum_class,
     "c13_missing_genesis": build_c13_missing_genesis,

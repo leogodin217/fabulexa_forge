@@ -190,8 +190,10 @@ repo, and the producer is never invoked.
   five records-layout defects (each C5 alone — a missing `record_index`, a misplaced
   `record_index`, a reference-annotated `prop__` without its `ref_index__` sibling, a
   `ref_index__` with a non-reference predecessor, a non-`BIGINT` `ref_index__`), a
-  `record_roles` registry that omits an emitted kind or an in-data `actor` sub-type
-  (C12), a wrong `base_format_version` (the version gate), a broken temporal
+  `record_roles` registry that omits an emitted kind, an in-data `actor` sub-type, or
+  an `actor` sub-type declared in `enum_domains` but exhibited by no row — the last
+  isolating C12's declared-equality clause, which the in-data coverage loop cannot
+  reach (C12), a wrong `base_format_version` (the version gate), a broken temporal
   attribute pairing (C13's structural clause alone — the vendored schema does not
   enforce the pairing), an out-of-enum `temporal_class` (C13's enum clause **and**
   C1, the schema enum-constraining the value; the expectation names both), a missing
@@ -269,7 +271,7 @@ sidecar-shape churn):
 | Area | Status |
 |---|---|
 | Project skeleton + standalone-venv boundary | Scaffolded |
-| Vendored contract (`base_format_version 11`) | Vendored — re-synced on version bump (`contract/README.md`) |
+| Vendored contract (`base_format_version 12`) | Vendored — re-synced on version bump (`contract/README.md`) |
 | Reader + conformance | Implemented (Stage 1) — [`reader.md`](reader.md), [`conformance.md`](conformance.md) |
 | Reader structural-temporal surface — `StructuralInstant`, `structural_instant_columns`, `records_structural_column_is_mutable`; the closed table-category gate at the sidecar structural floor; dimensional / source / base resolving their instant sets through it | Implemented — [`reader.md`](reader.md) § The structural-temporal surface |
 | `fabulexa-forge validate` CLI verb | Implemented (Stage 1) |
