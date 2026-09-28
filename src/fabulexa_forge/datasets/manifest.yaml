@@ -10,10 +10,10 @@ datasets:
       from one arrivals stream through A&E, wards, clinics, diagnostics and
       surgical pathways, competing for consultants, beds and theatres under
       seasonal demand pressure.
-    url: https://github.com/leogodin217/fabulexa_forge/releases/download/datasets-v2/nhs.tar.gz
-    sha256: a55671444f98e64a1d7d139d71404f6dea12bbab42ea1f0d40cf55a0026bec8d
-    size_bytes: 11247254
-    base_format_version: 11
+    url: https://github.com/leogodin217/fabulexa_forge/releases/download/datasets-v3/nhs.tar.gz
+    sha256: d3e82872fb85374fb06a6a6e705a923acc6b864f0dbb9cfb2601b0da62dba183
+    size_bytes: 11196341
+    base_format_version: 12
     configs: [dimensional.yaml, source.yaml, base.yaml, stream.yaml]
     commands:
       - fabulexa-forge export {dir}/bundle {dir}/dimensional.yaml nhs-star.duckdb --fmt duckdb
@@ -26,10 +26,10 @@ datasets:
       — customers, a popularity-weighted product catalog, storefront
       infrastructure, and funnel-grain customer actions shaped by a seasonal
       calendar of peaks and outages.
-    url: https://github.com/leogodin217/fabulexa_forge/releases/download/datasets-v2/retail.tar.gz
-    sha256: d2d3c2f6fa3fedeca2ca7909bad20645b5daa4d51775e3bb3d4d9a403002130d
-    size_bytes: 10921931
-    base_format_version: 11
+    url: https://github.com/leogodin217/fabulexa_forge/releases/download/datasets-v3/retail.tar.gz
+    sha256: 3d5982ce184c326f81640cc41be2137ace1ce444ca57cc0b7b8e40174479d8fd
+    size_bytes: 10797088
+    base_format_version: 12
     configs: [dimensional.yaml, source.yaml, base.yaml, stream.yaml]
     commands:
       - fabulexa-forge export {dir}/bundle {dir}/dimensional.yaml retail-star.duckdb --fmt duckdb
@@ -43,10 +43,10 @@ datasets:
       cycling between use and idleness, a metered usage firehose rated
       through per-SKU tier ladders, promotions and post-renewal credits; the
       facts of a monthly invoice, never the invoice itself.
-    url: https://github.com/leogodin217/fabulexa_forge/releases/download/datasets-v2/saas-billing.tar.gz
-    sha256: 17893c75b7bede392196834426a39e706d2a01e7752a6e09d0d4cc3ee04fb5a1
-    size_bytes: 41087328
-    base_format_version: 11
+    url: https://github.com/leogodin217/fabulexa_forge/releases/download/datasets-v3/saas-billing.tar.gz
+    sha256: 9b104307fe90177c3546321cce842e7a2fd0f29c5e73eaf14f0f6cd814e3c09d
+    size_bytes: 41087559
+    base_format_version: 12
     configs: [dimensional.yaml]
     commands:
       - fabulexa-forge export {dir}/bundle {dir}/dimensional.yaml saas-billing-star.duckdb --fmt duckdb
@@ -55,10 +55,10 @@ datasets:
       A single-region ride-sharing marketplace over one week — riders, a small
       finite driver fleet, and per-trip lifecycles from request to a completed
       or cancelled outcome, with match-wait emerging from peak demand.
-    url: https://github.com/leogodin217/fabulexa_forge/releases/download/datasets-v2/ride-sharing.tar.gz
-    sha256: 80fe35949cf86fa6e8a3421c9797c0a986978a8962d9ab4812d1819f229a4b34
-    size_bytes: 581629
-    base_format_version: 11
+    url: https://github.com/leogodin217/fabulexa_forge/releases/download/datasets-v3/ride-sharing.tar.gz
+    sha256: 309b032f9341b6f7ef7be1ca6115984ced955fc63edd37791d84e77302a74a20
+    size_bytes: 573339
+    base_format_version: 12
     configs: [dimensional.yaml, source.yaml, base.yaml, stream.yaml]
     commands:
       - fabulexa-forge export {dir}/bundle {dir}/dimensional.yaml ride-sharing-star.duckdb --fmt duckdb
@@ -71,10 +71,10 @@ datasets:
       drivers on one clock, tied by actor-to-actor matching and a surge price
       signal, with waits, supply deserts and loyalty-driven churn emerging from
       the supply/demand balance.
-    url: https://github.com/leogodin217/fabulexa_forge/releases/download/datasets-v2/ride-sharing-marketplace.tar.gz
-    sha256: 2c1ae9dd9cfb16c274e920d4c573944cdbd77706f97b000eb12be2d681fc4b72
-    size_bytes: 2967714
-    base_format_version: 11
+    url: https://github.com/leogodin217/fabulexa_forge/releases/download/datasets-v3/ride-sharing-marketplace.tar.gz
+    sha256: 685b071e86f14aa7dcc5a0158923acc96c80cf959ca8be1349295bd526d63511
+    size_bytes: 3045024
+    base_format_version: 12
     configs: [dimensional.yaml, source.yaml, base.yaml, stream.yaml]
     commands:
       - fabulexa-forge export {dir}/bundle {dir}/dimensional.yaml ride-sharing-marketplace-star.duckdb --fmt duckdb
@@ -87,10 +87,10 @@ datasets:
       records over a segmented network — role-driven benign traffic against a
       42-server estate, with a staged intrusion unfolding after a 30-day clean
       baseline.
-    url: https://github.com/leogodin217/fabulexa_forge/releases/download/datasets-v2/security-logs.tar.gz
-    sha256: 8b76f69d97d0bdd4b9bef2de4ac7c15eca4c98273cb8a1274890ccdd1d9302b0
-    size_bytes: 21267958
-    base_format_version: 11
+    url: https://github.com/leogodin217/fabulexa_forge/releases/download/datasets-v3/security-logs.tar.gz
+    sha256: facf293fd03eee7cf1d329a6f1720c5d2ec8ea85dfdb82439179b283e5778373
+    size_bytes: 21158275
+    base_format_version: 12
     configs: [dimensional.yaml, source.yaml, base.yaml, stream.yaml]
     commands:
       - fabulexa-forge export {dir}/bundle {dir}/dimensional.yaml security-logs-star.duckdb --fmt duckdb

@@ -263,6 +263,7 @@ class TestNegativeFixturesOpen:
         "c7_half_null_member",
         "c12_missing_kind",
         "c12_missing_subtype",
+        "c12_subtype_domain_mismatch",
         "c13_broken_pairing",
         "c13_out_of_enum_class",
         "c13_missing_genesis",

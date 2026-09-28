@@ -33,11 +33,14 @@ VERSION_LITERAL_PATTERNS: tuple[re.Pattern[str], ...] = (
     # "base_format_version == 5", "v5 JSON Schema" phrased as "base_format_version
     # 5 JSON Schema", etc.
     re.compile(r"base_format_version.{0,8}?\d", re.IGNORECASE | re.DOTALL),
-    # (b) word-bounded bare v+single-digit ("v6", "v4 emit", "at v5"). Excludes a
-    # "v<digit>" glued onto a preceding word/hyphen character (`Alice-v0`,
-    # `stateDiagram-v2`, a test's `_at_v5` identifier suffix) — those are sample
-    # data tokens or code identifiers, not a bare version reference.
-    re.compile(r"(?<![\w-])v\d\b"),
+    # (b) word-bounded bare v+digits ("v6", "v4 emit", "at v5", "v12"). Multi-digit
+    # is deliberate — the contract passed v9, so a single-digit pattern would stop
+    # catching stale prose exactly when versions grew a second digit. A leading zero
+    # is excluded because zero-padded `v001` tokens are fixture record ids, never a
+    # version. Also excludes a "v<digits>" glued onto a preceding word/hyphen
+    # character (`Alice-v0`, `stateDiagram-v2`, a test's `_at_v5` identifier suffix)
+    # — those are sample data tokens or code identifiers, not a version reference.
+    re.compile(r"(?<![\w-])v[1-9]\d{0,2}\b"),
 )
 
 # ---------------------------------------------------------------------------

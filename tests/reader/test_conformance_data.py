@@ -1564,6 +1564,36 @@ def test_c12_fails_on_c12_missing_subtype(
     )
 
 
+def test_c12_fails_on_c12_subtype_domain_mismatch(
+    base_fixtures: dict[str, Path],
+) -> None:
+    """C12 fails when record_roles['actor'] omits a declared, unobserved sub-type.
+
+    The observed-coverage loop cannot reach 'orderly' — no row carries it — so
+    only the declared-equality clause against enum_domains can catch it.
+    """
+    with open_emit(base_fixtures["c12_subtype_domain_mismatch"]) as emit:
+        result = run_check(emit, "C12")
+    assert not result.passed
+    assert any("orderly" in m and "actor_type" in m for m in result.messages), (
+        f"expected a declared-equality failure naming 'orderly': {result.messages}"
+    )
+
+
+def test_c12_passes_declared_equality_on_history_series(
+    base_fixtures: dict[str, Path],
+) -> None:
+    """C12 passes where enum_domains declares actor_type equal to record_roles.
+
+    history_series is the fixture that declares the actor_type domain, so it is
+    the positive input for the declared-equality clause (spanning omits the
+    entry, which skips the clause).
+    """
+    with open_emit(base_fixtures["history_series"]) as emit:
+        result = run_check(emit, "C12")
+    assert result.passed, f"C12 failed: {result.messages}"
+
+
 def test_c12_skips_when_record_roles_absent(tmp_path: Path) -> None:
     """C12 passes by vacuity (skip) when record_roles is absent from the sidecar."""
     dest = tmp_path / "c12_no_roles"
