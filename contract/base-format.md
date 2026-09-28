@@ -511,6 +511,7 @@ per allowed option:
 | Scenario declared no closed-domain string properties | `enum_domains` is omitted entirely; an empty `enum_domains: {}` is equivalent but producers omit the key |
 | Scenario declared closed-domain string properties | One entry per kind that has ≥ 1 closed-domain property; each per-kind object maps `<property>` to the ordered list of allowed-value objects |
 | Sub-typed kind | Carries an `enum_domains[<kind>][<kind>_type]` entry listing the declared sub-type names; the corresponding `records__<kind>` table carries a populated, never-NULL `prop__<kind>_type` `VARCHAR` column whose values are drawn from this list's `value`s |
+| Sub-typed kind declaring a single sub-type | Carries a one-entry `enum_domains[<kind>][<kind>_type]` list and the same never-NULL `prop__<kind>_type` column; a sub-typed kind declares at least one sub-type, and the entry and column are present whether it declares one or several |
 | A value carries a gloss | Its object's `description` is present, forwarded verbatim from the source emit; absence is silence, never a default |
 | A value's gloss comes from an author option gloss | An author-declared gloss on the value's declaring site forwards verbatim, uniformly with an engine-authored gloss |
 
@@ -1249,11 +1250,13 @@ for each kind K, value V in record_roles:
         require: V is an object; every value in V is in {"dimension","fact"}
         for each distinct v in records__actor.prop__actor_type:
             require: v in V
+        if enum_domains["actor"]["actor_type"] is present:
+            require: keys(V) == { e.value for e in enum_domains["actor"]["actor_type"] }
     else:
         require: V in {"dimension","fact"}
 ```
 
-`emitted_kinds` ranges over `category == "records"` tables only; `membership` tables are reached via `category`, not `record_roles`, and need no separate clause — every membership kind also has a records table, so its role coverage is transitive through the records loop. Every emitted kind is covered by `record_roles`: each records table's kind carries a business role. The `actor` object MAY list more sub-types than appear in `records__actor.prop__actor_type` (it lists every declared sub-type); C12 requires coverage, not exactness. C12 is classed with the semantic checks (C6, C7, C9, C10, C11) and is skipped only when `record_roles` is absent — the additive-field guard, mirroring C11's skip.
+`emitted_kinds` ranges over `category == "records"` tables only; `membership` tables are reached via `category`, not `record_roles`, and need no separate clause — every membership kind also has a records table, so its role coverage is transitive through the records loop. Every emitted kind is covered by `record_roles`: each records table's kind carries a business role. The `actor` object MAY list more sub-types than appear in `records__actor.prop__actor_type` (it lists every declared sub-type); C12 requires coverage of the observed values and exact equality with the declared sub-types in `enum_domains["actor"]["actor_type"]` — the two registries name the same actor sub-types. C12 is classed with the semantic checks (C6, C7, C9, C10, C11) and is skipped only when `record_roles` is absent — the additive-field guard, mirroring C11's skip.
 
 ### C13. Temporal-class consistency
 
