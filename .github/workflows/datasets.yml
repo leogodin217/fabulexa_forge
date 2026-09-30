@@ -1,0 +1,135 @@
+# Published datasets — every manifest entry downloads, verifies, and runs.
+#
+# The unit tests never touch the network (docs/architecture/datasets.md
+# § Invariants), so nothing else proves that each shipped manifest entry names
+# a release asset that exists, still matches its pinned size and sha256, and
+# that the configs packed inside it still run under this code. One matrix job
+# per dataset, in parallel:
+#
+#   1. `fabulexa-forge datasets get` — the real fetch + verify + extract path.
+#   2. Every next-step command `get` prints, run exactly as a user would copy
+#      it. A command fails on a non-zero exit or on empty stdout (every export
+#      reports row counts; every stream emits records).
+#
+# The packed configs are frozen at release time while the code moves, so a
+# change that breaks a published pack's config turns this red: re-release the
+# pack (tools/build_dataset_pack.py) before merging. That is why this runs on
+# every PR rather than behind a path filter; the weekly run catches a release
+# asset vanishing without any commit here.
+name: Datasets
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  manifest:
+    name: list manifest entries
+    runs-on: ubuntu-latest
+    outputs:
+      names: ${{ steps.names.outputs.names }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - name: Install Python
+        run: uv python install
+
+      - name: Sync the environment
+        run: uv sync --locked
+
+      # An empty manifest fails rather than fanning out to zero jobs and
+      # passing vacuously.
+      - name: Read the shipped manifest
+        id: names
+        run: |
+          names=$(uv run python -c "
+          import json
+          from fabulexa_forge.datasets.manifest import load_manifest
+          print(json.dumps([entry.name for entry in load_manifest().datasets]))
+          ")
+          if [ "$names" = "[]" ]; then
+            echo "::error::the shipped manifest lists no datasets"
+            exit 1
+          fi
+          echo "names=$names" >> "$GITHUB_OUTPUT"
+
+  dataset:
+    name: ${{ matrix.name }}
+    needs: manifest
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        name: ${{ fromJSON(needs.manifest.outputs.names) }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - name: Install Python
+        run: uv python install
+
+      - name: Sync the environment
+        run: uv sync --locked
+
+      # stdout is the pack's next-step commands, one per line.
+      - name: Download and verify
+        run: |
+          uv run fabulexa-forge datasets get "${{ matrix.name }}" \
+            --dir "$RUNNER_TEMP/pack" > "$RUNNER_TEMP/commands.txt"
+          cat "$RUNNER_TEMP/commands.txt"
+
+      # Every command is attempted so one run reports every broken config.
+      # stdout goes to a file (streams emit up to ~100 MB); stderr stays in
+      # the log. Outputs land outside the checkout, so `uv run` is pointed at
+      # the project explicitly — from runner.temp it would find no venv.
+      - name: Run the printed commands
+        working-directory: ${{ runner.temp }}
+        run: |
+          mkdir -p work out
+          cd work
+          failed=0
+          i=0
+          while IFS= read -r cmd; do
+            i=$((i + 1))
+            read -ra argv <<< "$cmd"
+            echo "::group::$cmd"
+            if uv run --project "$GITHUB_WORKSPACE" "${argv[@]}" > "../out/$i.stdout"; then
+              bytes=$(wc -c < "../out/$i.stdout")
+              if [ "$bytes" -eq 0 ]; then
+                echo "::error::command $i exited 0 but wrote nothing to stdout: $cmd"
+                failed=1
+              else
+                head -c 2000 "../out/$i.stdout"
+                echo
+                echo "($bytes bytes of stdout)"
+              fi
+            else
+              echo "::error::command $i failed: $cmd"
+              failed=1
+            fi
+            echo "::endgroup::"
+          done < ../commands.txt
+          if [ "$i" -eq 0 ]; then
+            echo "::error::datasets get printed no commands"
+            failed=1
+          fi
+          exit "$failed"
