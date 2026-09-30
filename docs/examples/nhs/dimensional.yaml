@@ -208,8 +208,24 @@
 #            (1922-07-05..2007-06-19), so it is declared via `date_parse`
 #            and reinterpreted as a real DATE rather than passed through as
 #            text.
+#
+# CALENDAR: dim_date spans 2023-01-01 .. 2028-12-31. The tape covers the three
+# calendar years 2023-2025 (UTC); the three years past it exist for
+# fact_booking.opening_date_key — 871 of the 9,322 bookings (all `confirmed`)
+# book an appointment slot opening after tape's end, the latest on
+# 2028-07-25, and a key outside dim_date is a refusal (DateRefOutOfRange), not
+# a NULL. Every instant in the star carries a date key beside it, named for
+# its stem (occurred_at -> occurred_date_key, entered_at -> entered_date_key),
+# NULL exactly where the instant is (an interval still open at tape's end), so
+# per-day / per-month / weekday counts read off the calendar by key. The dims
+# are Type-1 with no version window, so none carries one. birth_date is NOT
+# keyed: it is decades before the range — compare it as a DATE.
 
 mode: dimensional
+
+date_dimension:
+  from: "2023-01-01"
+  to: "2028-12-31"
 
 keys:
   actor: presentation_id
@@ -430,8 +446,14 @@ dimensional:
         #                    AND (s.exited_at IS NULL OR f.requested_at < s.exited_at)
         - {name: requested_at, derived: {timestamp: {source: prop__requested_at}},
            description: "When the booking was requested."}
+        - {name: requested_date_key, date_ref: {source: prop__requested_at},
+           description: "dim_date.date_key of the day the booking was
+             requested."}
         - {name: opening_at, derived: {timestamp: {source: prop__opening_at}},
            description: "When the booked appointment slot opens."}
+        - {name: opening_date_key, date_ref: {source: prop__opening_at},
+           description: "dim_date.date_key of the day the booked appointment
+             slot opens."}
         - {name: status, from: prop__status}
 
     # --- fact: pathway state (history_interval grain) — one row per
@@ -465,10 +487,17 @@ dimensional:
            description: "State the episode occupied during this interval."}
         - {name: entered_at, derived: {timestamp: {source: sim_time}},
            description: "When the patient entered this state."}
+        - {name: entered_date_key, date_ref: {source: sim_time},
+           description: "dim_date.date_key of the day the patient entered this
+             state."}
         # lead_sim_time = LEAD(sim_time): NULL on the episode's last (open) state.
         - {name: exited_at, derived: {timestamp: {source: lead_sim_time}},
            description: "When the patient left this state; NULL while the
              episode is still in it at the end of the extract."}
+        - {name: exited_date_key, date_ref: {source: lead_sim_time},
+           description: "dim_date.date_key of the day the patient left this
+             state; NULL while the episode is still in it at the end of the
+             extract."}
 
     # --- fact: consultant allocation (membership grain) — one row per interval
     #     a patient held a consultant slot; utilisation and caseload. ---
@@ -498,10 +527,17 @@ dimensional:
              occupies."}
         - {name: allocated_at, derived: {timestamp: {source: joined_sim_time}},
            description: "When the patient was allocated to the consultant."}
+        - {name: allocated_date_key, date_ref: {source: joined_sim_time},
+           description: "dim_date.date_key of the day the patient was allocated
+             to the consultant."}
         # NULL while the patient still holds the consultant at tape's end.
         - {name: released_at, derived: {timestamp: {source: left_sim_time}},
            description: "When the allocation ended; NULL while the patient is
              still under the consultant's care at the end of the extract."}
+        - {name: released_date_key, date_ref: {source: left_sim_time},
+           description: "dim_date.date_key of the day the allocation ended; NULL
+             while the patient is still under the consultant's care at the end
+             of the extract."}
 
     # --- fact: consultant caseload (history_interval grain) — one row per
     #     constant-caseload interval of a consultant. `allocated` is operational
@@ -533,10 +569,16 @@ dimensional:
         - {name: entered_at, derived: {timestamp: {source: sim_time}},
            description: "When the consultant's caseload changed to this
              value."}
+        - {name: entered_date_key, date_ref: {source: sim_time},
+           description: "dim_date.date_key of the day the consultant's caseload
+             changed to this value."}
         # NULL on the consultant's current (open) caseload interval.
         - {name: exited_at, derived: {timestamp: {source: lead_sim_time}},
            description: "When the caseload next changed; NULL on the
              consultant's current interval."}
+        - {name: exited_date_key, date_ref: {source: lead_sim_time},
+           description: "dim_date.date_key of the day the caseload next changed;
+             NULL on the consultant's current interval."}
 
     # ------------------------------------------------------------------
     # Patient state timelines — the tracked clinical state moved OUT of
@@ -570,10 +612,16 @@ dimensional:
              (active, in_ed, admitted, ... recovered, deceased)."}
         - {name: entered_at, derived: {timestamp: {source: sim_time}},
            description: "When the patient entered this status."}
+        - {name: entered_date_key, date_ref: {source: sim_time},
+           description: "dim_date.date_key of the day the patient entered this
+             status."}
         # NULL on the patient's current (open) status interval.
         - {name: exited_at, derived: {timestamp: {source: lead_sim_time}},
            description: "When the patient left this status; NULL on their
              current status at the end of the extract."}
+        - {name: exited_date_key, date_ref: {source: lead_sim_time},
+           description: "dim_date.date_key of the day the patient left this
+             status; NULL on their current status at the end of the extract."}
 
     # --- fact: HAI status (history_interval grain) — one row per
     #     infection-status interval (clear / colonized): the trust's
@@ -599,10 +647,17 @@ dimensional:
              interval: clear or colonized."}
         - {name: entered_at, derived: {timestamp: {source: sim_time}},
            description: "When the patient entered this infection status."}
+        - {name: entered_date_key, date_ref: {source: sim_time},
+           description: "dim_date.date_key of the day the patient entered this
+             infection status."}
         # NULL on the patient's current (open) infection-status interval.
         - {name: exited_at, derived: {timestamp: {source: lead_sim_time}},
            description: "When the patient left this infection status; NULL on
              their current status at the end of the extract."}
+        - {name: exited_date_key, date_ref: {source: lead_sim_time},
+           description: "dim_date.date_key of the day the patient left this
+             infection status; NULL on their current status at the end of the
+             extract."}
 
     # --- fact: FFT response (history_point grain) — one row per recorded
     #     Friends & Family Test rating. A response is a point event, and
@@ -627,6 +682,9 @@ dimensional:
              very_poor, or no_response."}
         - {name: recorded_at, derived: {timestamp: {source: sim_time}},
            description: "When the response was recorded."}
+        - {name: recorded_date_key, date_ref: {source: sim_time},
+           description: "dim_date.date_key of the day the response was
+             recorded."}
 
     # ------------------------------------------------------------------
     # The clinical event stream: one fact per clinical process, at decision
@@ -660,6 +718,9 @@ dimensional:
         - {name: occurred_at, derived: {timestamp: {source: created_sim_time}},
            description: "When the patient was triaged to a pathway at the
              front door."}
+        - {name: occurred_date_key, date_ref: {source: created_sim_time},
+           description: "dim_date.date_key of the day the patient was triaged to
+             a pathway at the front door."}
 
     # --- fact: emergency care (ECDS shape, decision grain) — A&E milestones ---
     - name: fact_emergency_care
@@ -685,6 +746,8 @@ dimensional:
              ed_arrival, triage, ed_assessment, or ed_diagnosis."}
         - {name: occurred_at, derived: {timestamp: {source: created_sim_time}},
            description: "When the milestone occurred."}
+        - {name: occurred_date_key, date_ref: {source: created_sim_time},
+           description: "dim_date.date_key of the day the milestone occurred."}
         # The four-hour-breach metric in its native form: minutes from this
         # attendance's ed_arrival to this milestone (0 on the arrival row).
         - name: minutes_from_arrival
@@ -722,6 +785,8 @@ dimensional:
              referral_created, appointment_attended, or appointment_dna."}
         - {name: occurred_at, derived: {timestamp: {source: created_sim_time}},
            description: "When the milestone occurred."}
+        - {name: occurred_date_key, date_ref: {source: created_sim_time},
+           description: "dim_date.date_key of the day the milestone occurred."}
 
     # --- fact: diagnostics (DM01 shape) — order, perform, communicate ---
     - name: fact_diagnostics
@@ -750,6 +815,8 @@ dimensional:
              diagnostic_result_communicated."}
         - {name: occurred_at, derived: {timestamp: {source: created_sim_time}},
            description: "When the milestone occurred."}
+        - {name: occurred_date_key, date_ref: {source: created_sim_time},
+           description: "dim_date.date_key of the day the milestone occurred."}
         # Turnaround: hours from this request's diagnostic_ordered event.
         - name: hours_from_order
           description: "Hours since this request's diagnostic_ordered event —
@@ -799,6 +866,8 @@ dimensional:
              in."}
         - {name: occurred_at, derived: {timestamp: {source: created_sim_time}},
            description: "When the milestone occurred."}
+        - {name: occurred_date_key, date_ref: {source: created_sim_time},
+           description: "dim_date.date_key of the day the milestone occurred."}
 
     # --- fact: cancer pathway (CWT shape) — 2WW / 62-day milestones ---
     - name: fact_cancer_pathway
@@ -828,6 +897,8 @@ dimensional:
              or cancer_treatment_decision."}
         - {name: occurred_at, derived: {timestamp: {source: created_sim_time}},
            description: "When the milestone occurred."}
+        - {name: occurred_date_key, date_ref: {source: created_sim_time},
+           description: "dim_date.date_key of the day the milestone occurred."}
         # The waiting-time standards in native form: hours from this
         # pathway's cancer_referral (2WW = 336, 62-day = 1488).
         - name: hours_from_referral
@@ -870,6 +941,8 @@ dimensional:
              recovery_started."}
         - {name: occurred_at, derived: {timestamp: {source: created_sim_time}},
            description: "When the milestone occurred."}
+        - {name: occurred_date_key, date_ref: {source: created_sim_time},
+           description: "dim_date.date_key of the day the milestone occurred."}
 
     # --- fact: post-discharge follow-up — the check at home ---
     - name: fact_post_discharge
@@ -891,6 +964,9 @@ dimensional:
            description: "The discharged patient being checked (dim_patient)."}
         - {name: occurred_at, derived: {timestamp: {source: created_sim_time}},
            description: "When the post-discharge check happened."}
+        - {name: occurred_date_key, date_ref: {source: created_sim_time},
+           description: "dim_date.date_key of the day the post-discharge check
+             happened."}
 
     # --- fact: FFT — Friends and Family Test invitations ---
     - name: fact_fft
@@ -912,6 +988,9 @@ dimensional:
            description: "The invited patient (dim_patient)."}
         - {name: occurred_at, derived: {timestamp: {source: created_sim_time}},
            description: "When the FFT invitation was sent."}
+        - {name: occurred_date_key, date_ref: {source: created_sim_time},
+           description: "dim_date.date_key of the day the FFT invitation was
+             sent."}
 
     # --- fact: waiting-list deterioration — the one decision type that spans
     #     THREE pathways (cancer / outpatient / surgical), so it is its own
@@ -939,6 +1018,9 @@ dimensional:
              cancer, outpatient, or surgical pathway."}
         - {name: occurred_at, derived: {timestamp: {source: created_sim_time}},
            description: "When the deterioration was recorded."}
+        - {name: occurred_date_key, date_ref: {source: created_sim_time},
+           description: "dim_date.date_key of the day the deterioration was
+             recorded."}
 
     # ------------------------------------------------------------------
     # The five binding-role bridges (see the BRIDGES header note): clinical
@@ -970,6 +1052,9 @@ dimensional:
         - {name: recorded_at, derived: {timestamp: {source: joined_sim_time}},
            description: "When the test was linked to its ordering or
              performing event."}
+        - {name: recorded_date_key, date_ref: {source: joined_sim_time},
+           description: "dim_date.date_key of the day the test was linked to its
+             ordering or performing event."}
 
     # --- bridge: medication administration -> formulary. MULTI-PICK: up to
     #     three medications per medication_administered decision, ordered by
@@ -997,6 +1082,9 @@ dimensional:
              (0 = first) — up to three per event."}
         - {name: administered_at, derived: {timestamp: {source: joined_sim_time}},
            description: "When the medication was administered."}
+        - {name: administered_date_key, date_ref: {source: joined_sim_time},
+           description: "dim_date.date_key of the day the medication was
+             administered."}
 
     # --- bridge: ward assignment -> ward catalogue (1:1 per spell) ---
     - name: fact_ward_stay
@@ -1017,6 +1105,9 @@ dimensional:
            description: "The ward the patient was placed on (dim_ward)."}
         - {name: assigned_at, derived: {timestamp: {source: joined_sim_time}},
            description: "When the patient was assigned to the ward."}
+        - {name: assigned_date_key, date_ref: {source: joined_sim_time},
+           description: "dim_date.date_key of the day the patient was assigned
+             to the ward."}
 
     # --- bridge: surgical procedure -> OPCS-4 catalogue. Bound at BOTH
     #     pre_op_assessment (planned) and surgery_performed (performed) —
@@ -1041,6 +1132,9 @@ dimensional:
         - {name: recorded_at, derived: {timestamp: {source: joined_sim_time}},
            description: "When the procedure was linked to its planning or
              performing event."}
+        - {name: recorded_date_key, date_ref: {source: joined_sim_time},
+           description: "dim_date.date_key of the day the procedure was linked
+             to its planning or performing event."}
 
     # --- bridge: theatre session -> theatre catalogue (surgery_performed
     #     events only) ---
@@ -1061,3 +1155,6 @@ dimensional:
            description: "The theatre the operation ran in (dim_theatre)."}
         - {name: used_at, derived: {timestamp: {source: joined_sim_time}},
            description: "When the theatre was used for the operation."}
+        - {name: used_date_key, date_ref: {source: joined_sim_time},
+           description: "dim_date.date_key of the day the theatre was used for
+             the operation."}

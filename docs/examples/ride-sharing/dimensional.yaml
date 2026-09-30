@@ -95,8 +95,20 @@
 # `created_sim_time`, `deactivated_at` and `last_mutation_sim_time` — so
 # fact_trip carries both the moment the trip was requested and the moment it
 # settled, and their difference is end-to-end trip duration.
+#
+# CALENDAR: dim_date spans January 2026 (2026-01-01 .. 2026-01-31); the tape is
+# the one week 2026-01-05 .. 2026-01-11 UTC, declared as its whole month so
+# the calendar has no mid-month edge. Every instant carries a date key beside
+# it, named for its stem (requested_at -> requested_date_key, held_from ->
+# held_from_date_key), NULL exactly where the instant is, so the week's demand
+# reads by day_name / is_weekend off the calendar. The dims carry no instants,
+# so none carries a key.
 
 mode: dimensional
+
+date_dimension:
+  from: "2026-01-01"
+  to: "2026-01-31"
 
 keys:
   entity: record_index
@@ -194,9 +206,15 @@ dimensional:
         - name: requested_at
           derived: {timestamp: {source: created_sim_time}}
           description: "When the rider requested the trip."
+        - name: requested_date_key
+          date_ref: {source: created_sim_time}
+          description: "dim_date.date_key of the day the rider requested the trip."
         - name: settled_at
           derived: {timestamp: {source: last_mutation_sim_time}}
           description: "When the trip last changed — for finished trips, the moment it completed or was cancelled."
+        - name: settled_date_key
+          date_ref: {source: last_mutation_sim_time}
+          description: "dim_date.date_key of the day the trip last changed — for finished trips, the day it completed or was cancelled."
 
     # --- fact: trip state (history_interval grain) — one row per state occupancy.
     #     THE match-wait fact: time in `matching` is the emergent wait the whole
@@ -221,10 +239,16 @@ dimensional:
         - name: entered_at
           derived: {timestamp: {source: sim_time}}
           description: "When the trip entered this stage."
+        - name: entered_date_key
+          date_ref: {source: sim_time}
+          description: "dim_date.date_key of the day the trip entered this stage."
         # lead_sim_time = LEAD(sim_time): NULL on the trip's last (open) state
         - name: exited_at
           derived: {timestamp: {source: lead_sim_time}}
           description: "When the trip left this stage; NULL on the stage the trip was still in at the end of the week."
+        - name: exited_date_key
+          date_ref: {source: lead_sim_time}
+          description: "dim_date.date_key of the day the trip left this stage; NULL on the stage the trip was still in at the end of the week."
 
     # --- bridge fact: trip <-> driver — grain: one driver hold (1,496 rows) ---
     #     membership__resource__holders: owner = resource (the driver), member =
@@ -252,9 +276,15 @@ dimensional:
         - name: held_from
           derived: {timestamp: {source: joined_sim_time}}
           description: "When the driver was assigned to the trip."
+        - name: held_from_date_key
+          date_ref: {source: joined_sim_time}
+          description: "dim_date.date_key of the day the driver was assigned to the trip."
         - name: released_at
           derived: {timestamp: {source: left_sim_time}}
           description: "When the driver was released at drop-off or cancellation; NULL if the trip was still underway at the end of the week."
+        - name: released_date_key
+          date_ref: {source: left_sim_time}
+          description: "dim_date.date_key of the day the driver was released at drop-off or cancellation; NULL if the trip was still underway at the end of the week."
 
     # --- bridge fact: trip <-> rider — grain: one rider binding (1,496 rows) ---
     #     membership__tick_decision__bindings narrowed to the rider role. `trip_id`
@@ -279,6 +309,9 @@ dimensional:
         - name: assigned_at
           derived: {timestamp: {source: joined_sim_time}}
           description: "When the rider was assigned to the trip at request time."
+        - name: assigned_date_key
+          date_ref: {source: joined_sim_time}
+          description: "dim_date.date_key of the day the rider was assigned to the trip at request time."
 
     # --- bridge fact: trip <-> pickup zone — grain: one zone binding (1,496 rows) ---
     #     Same membership table, the other role. Kept as its own table rather than
@@ -304,3 +337,6 @@ dimensional:
         - name: assigned_at
           derived: {timestamp: {source: joined_sim_time}}
           description: "When the pickup zone was recorded for the trip at request time."
+        - name: assigned_date_key
+          date_ref: {source: joined_sim_time}
+          description: "dim_date.date_key of the day the pickup zone was recorded for the trip at request time."
