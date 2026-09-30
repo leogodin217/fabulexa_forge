@@ -134,8 +134,21 @@
 # populations, so each is declared via `date_parse` and reinterpreted as a real
 # DATE. Both dims are Type-1, so the election is the plain records-grain case;
 # retail's dim_customer applies the same election on a `scd: type2` table.
+#
+# CALENDAR: dim_date spans January-February 2026 (2026-01-01 .. 2026-02-28);
+# the tape runs 2026-01-09 .. 2026-02-07 UTC, declared as its whole months so
+# the calendar has no mid-month edge. Every fact instant carries a date key
+# beside it, named for its stem (matched_at -> matched_date_key, entered_at ->
+# entered_date_key), NULL exactly where the instant is, so per-day match and
+# tier-change counts read off the calendar by key. date_of_birth is NOT
+# keyed: it is decades before the range, and a key outside dim_date is a
+# refusal (DateRefOutOfRange), not a NULL — compare it as a DATE.
 
 mode: dimensional
+
+date_dimension:
+  from: "2026-01-01"
+  to: "2026-02-28"
 
 keys:
   actor: record_index
@@ -297,11 +310,20 @@ dimensional:
         - name: matched_at
           derived: {timestamp: {source: created_sim_time}}
           description: When the rider and driver were matched.
+        - name: matched_date_key
+          date_ref: {source: created_sim_time}
+          description: >-
+            dim_date.date_key of the day the rider and driver were matched.
         - name: closed_at
           derived: {timestamp: {source: deactivated_at}}
           description: >-
             When the match was released — the trip finished or fell through;
             NULL if still open.
+        - name: closed_date_key
+          date_ref: {source: deactivated_at}
+          description: >-
+            dim_date.date_key of the day the match was released — the trip
+            finished or fell through; NULL if still open.
 
     # --- fact: session state (history_interval grain) — one row per state
     #     occupancy, both sides of the market. Rider wait = time in waiting;
@@ -348,10 +370,19 @@ dimensional:
         - name: entered_at
           derived: {timestamp: {source: sim_time}}
           description: When the session entered this state.
+        - name: entered_date_key
+          date_ref: {source: sim_time}
+          description: >-
+            dim_date.date_key of the day the session entered this state.
         # lead_sim_time = LEAD(sim_time): NULL on the session's last (open) state
         - name: exited_at
           derived: {timestamp: {source: lead_sim_time}}
           description: When the session left this state; NULL if still in it.
+        - name: exited_date_key
+          date_ref: {source: lead_sim_time}
+          description: >-
+            dim_date.date_key of the day the session left this state; NULL if
+            still in it.
 
     # --- fact: loyalty band (history_interval grain) — one row per tenure in one
     #     tier. The churn ladder: how long an agent held a band, which band it fell
@@ -391,9 +422,18 @@ dimensional:
         - name: entered_at
           derived: {timestamp: {source: sim_time}}
           description: When the rider or driver entered this tier.
+        - name: entered_date_key
+          date_ref: {source: sim_time}
+          description: >-
+            dim_date.date_key of the day the rider or driver entered this tier.
         # NULL on the agent's current (open) band
         - name: exited_at
           derived: {timestamp: {source: lead_sim_time}}
           description: >-
             When the rider or driver left this tier; NULL if it is still their
             current tier.
+        - name: exited_date_key
+          date_ref: {source: lead_sim_time}
+          description: >-
+            dim_date.date_key of the day the rider or driver left this tier;
+            NULL if it is still their current tier.
