@@ -202,10 +202,11 @@ stderr, exit 1. It never talks to the network.
 Publishing a dataset is: author configs in `docs/examples/<name>/` → run the
 pack builder → upload the archive to the release → commit the manifest entry.
 Uploading and tagging are manual/`gh`-driven; the order is enforced by the
-`Datasets` CI workflow (`.github/workflows/datasets.yml`), which runs the real
-`datasets get` against every manifest entry on any change to the manifest or
-fetch code and weekly thereafter — a manifest committed ahead of its release
-turns it red. The pack is the publication
+`Datasets` CI workflow (`.github/workflows/datasets.yml`), which on every PR
+and weekly runs the real `datasets get` against every manifest entry and then
+every next-step command it prints — a manifest committed ahead of its release,
+or a code change that breaks a published pack's configs, turns it red until the
+pack is re-released. The pack is the publication
 unit — the sidecar and atlas ship inside it, so the repo commits no copies of
 them beside the gitignored bundle binary.
 
