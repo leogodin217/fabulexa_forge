@@ -1,0 +1,76 @@
+# Published-dataset downloads — every manifest entry fetches and verifies.
+#
+# The unit tests never touch the network (docs/architecture/datasets.md
+# § Invariants), so nothing else proves that each shipped manifest entry names
+# a release asset that exists and still matches its pinned size and sha256.
+# This job runs the real `fabulexa-forge datasets get` against every entry: a
+# manifest pointing at an unpublished release, a replaced asset, or a broken
+# fetch path turns it red.
+#
+# Triggers: a change to the manifest or the fetch code (the PR that re-stamps
+# the manifest must not merge before its release is published), plus a weekly
+# run, since a release asset can vanish without any commit here.
+name: Datasets
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - src/fabulexa_forge/datasets/**
+      - .github/workflows/datasets.yml
+  pull_request:
+    paths:
+      - src/fabulexa_forge/datasets/**
+      - .github/workflows/datasets.yml
+  schedule:
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  downloads:
+    name: every manifest entry downloads and verifies
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - name: Install Python
+        run: uv python install
+
+      - name: Sync the environment
+        run: uv sync --locked
+
+      # Every entry is attempted so one run reports every broken pack; an empty
+      # manifest fails rather than passing vacuously.
+      - name: Fetch every dataset
+        run: |
+          names=$(uv run python -c "
+          from fabulexa_forge.datasets.manifest import load_manifest
+          print('\n'.join(entry.name for entry in load_manifest().datasets))
+          ")
+          if [ -z "$names" ]; then
+            echo "::error::the shipped manifest lists no datasets"
+            exit 1
+          fi
+          failed=""
+          for name in $names; do
+            echo "::group::$name"
+            if ! uv run fabulexa-forge datasets get "$name" --dir "$RUNNER_TEMP/datasets/$name"; then
+              failed="$failed $name"
+              echo "::error::dataset '$name' failed to download or verify"
+            fi
+            echo "::endgroup::"
+          done
+          if [ -n "$failed" ]; then
+            echo "failed:$failed"
+            exit 1
+          fi
