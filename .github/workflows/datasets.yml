@@ -99,7 +99,8 @@ jobs:
 
       # Every command is attempted so one run reports every broken config.
       # stdout goes to a file (streams emit up to ~100 MB); stderr stays in
-      # the log.
+      # the log. Outputs land outside the checkout, so `uv run` is pointed at
+      # the project explicitly — from runner.temp it would find no venv.
       - name: Run the printed commands
         working-directory: ${{ runner.temp }}
         run: |
@@ -111,7 +112,7 @@ jobs:
             i=$((i + 1))
             read -ra argv <<< "$cmd"
             echo "::group::$cmd"
-            if uv run "${argv[@]}" > "../out/$i.stdout"; then
+            if uv run --project "$GITHUB_WORKSPACE" "${argv[@]}" > "../out/$i.stdout"; then
               bytes=$(wc -c < "../out/$i.stdout")
               if [ "$bytes" -eq 0 ]; then
                 echo "::error::command $i exited 0 but wrote nothing to stdout: $cmd"
