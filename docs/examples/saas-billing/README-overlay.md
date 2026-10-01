@@ -113,10 +113,15 @@ of the inherited query should be able to say which one it implements.
   warehouse elects for accounts (`ACC-#####`). Nothing checks this: a
   ladder row for an id that does not exist joins to zero rows and is never
   reported.
-- `dim_date` spans exactly the five run years, 2026-01-01 to 2030-12-31. A
-  date the query computes — a credit's expiry, a term end a year out — can
-  fall past it and then has no `date_key`; compare such dates as dates or
-  instants rather than keying into the calendar.
+- `dim_date` spans 2025-12-01 to 2031-12-31: the five run years (2026–2030),
+  the month before the first account was provisioned (the anchor month of a
+  month-recursive credit ledger), and the year after the run, so a credit's
+  expiry or a term end a year out still keys into the calendar. A computed
+  date outside that range has no `date_key`; compare such dates as dates or
+  instants rather than keying into the calendar. A month spine grouped over
+  all of `dim_date` includes December 2025 and all of 2031, which have no
+  billing activity; take the spine from the months that have data when that
+  matters.
   `fact_lifecycle_interval.ended_date_key` is NULL on an interval still open
   at the extract's end, like `ended_at`.
 - `dim_account.size_band` is the customer's **headcount** band (employees),
