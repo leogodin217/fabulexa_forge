@@ -60,9 +60,13 @@
 #            the manifest under `supplement`. account_id / sku_id are written
 #            in the surfaces this config elects (presentation_id: ACC-/SKU-);
 #            nothing checks that. Its DATE windows need no anchor.
-#   CALENDAR dim_date spans the run's five calendar years (2026-01-01 ..
-#            2030-12-31). Every instant a billing rule attributes to a month
-#            carries a yyyymmdd key beside its timestamp — dim_account.
+#   CALENDAR dim_date spans 2025-12-01 .. 2031-12-31: the run's five
+#            calendar years, plus the month before the first account (the
+#            anchor month of a month-recursive credit ledger) and the year
+#            after the run (credit expiries, issued_at + up to 365 days, and
+#            year-out term ends). Every instant a billing rule attributes
+#            to a month carries a yyyymmdd key beside its timestamp —
+#            dim_account.
 #            created_date_key, fact_usage_event.occurred_date_key,
 #            fact_credit.issued_date_key, fact_lifecycle_interval.
 #            started_date_key / ended_date_key (NULL while open) — so the
@@ -133,8 +137,8 @@ mode: dimensional
 readme_overlay: README-overlay.md
 
 date_dimension:
-  from: "2026-01-01"
-  to: "2030-12-31"
+  from: "2025-12-01"
+  to: "2031-12-31"
 
 keys:
   actor: presentation_id

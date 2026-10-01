@@ -10,7 +10,7 @@ datasets:
       from one arrivals stream through A&E, wards, clinics, diagnostics and
       surgical pathways, competing for consultants, beds and theatres under
       seasonal demand pressure.
-    url: https://github.com/leogodin217/fabulexa_forge/releases/download/datasets-v4/nhs.tar.gz
+    url: https://github.com/leogodin217/fabulexa_forge/releases/download/datasets-v5/nhs.tar.gz
     sha256: e46c4cc00e0df2b652685949b07f80d0aacc50b344bbd5dd1292309bf0ffa198
     size_bytes: 11197170
     base_format_version: 12
@@ -26,7 +26,7 @@ datasets:
       — customers, a popularity-weighted product catalog, storefront
       infrastructure, and funnel-grain customer actions shaped by a seasonal
       calendar of peaks and outages.
-    url: https://github.com/leogodin217/fabulexa_forge/releases/download/datasets-v4/retail.tar.gz
+    url: https://github.com/leogodin217/fabulexa_forge/releases/download/datasets-v5/retail.tar.gz
     sha256: 3d5982ce184c326f81640cc41be2137ace1ce444ca57cc0b7b8e40174479d8fd
     size_bytes: 10797088
     base_format_version: 12
@@ -43,9 +43,9 @@ datasets:
       cycling between use and idleness, a metered usage firehose rated
       through per-SKU tier ladders, promotions and post-renewal credits; the
       facts of a monthly invoice, never the invoice itself.
-    url: https://github.com/leogodin217/fabulexa_forge/releases/download/datasets-v4/saas-billing.tar.gz
-    sha256: 9b104307fe90177c3546321cce842e7a2fd0f29c5e73eaf14f0f6cd814e3c09d
-    size_bytes: 41087559
+    url: https://github.com/leogodin217/fabulexa_forge/releases/download/datasets-v5/saas-billing.tar.gz
+    sha256: 2fcf823532a1e2c3efaec930e50beacedbd27c433aaabd571d25e7e861feeb79
+    size_bytes: 41088144
     base_format_version: 12
     configs: [dimensional.yaml]
     commands:
@@ -55,7 +55,7 @@ datasets:
       A single-region ride-sharing marketplace over one week — riders, a small
       finite driver fleet, and per-trip lifecycles from request to a completed
       or cancelled outcome, with match-wait emerging from peak demand.
-    url: https://github.com/leogodin217/fabulexa_forge/releases/download/datasets-v4/ride-sharing.tar.gz
+    url: https://github.com/leogodin217/fabulexa_forge/releases/download/datasets-v5/ride-sharing.tar.gz
     sha256: 24612eda66655c117c33de5d227b51ddf8c30c2ffcb86d13ada5bc51952a0076
     size_bytes: 573714
     base_format_version: 12
@@ -71,7 +71,7 @@ datasets:
       drivers on one clock, tied by actor-to-actor matching and a surge price
       signal, with waits, supply deserts and loyalty-driven churn emerging from
       the supply/demand balance.
-    url: https://github.com/leogodin217/fabulexa_forge/releases/download/datasets-v4/ride-sharing-marketplace.tar.gz
+    url: https://github.com/leogodin217/fabulexa_forge/releases/download/datasets-v5/ride-sharing-marketplace.tar.gz
     sha256: e798447aabe4fa7b8574c838ad27fe00185bb76f204bd182def49020d1ff2702
     size_bytes: 3045418
     base_format_version: 12
@@ -87,7 +87,7 @@ datasets:
       records over a segmented network — role-driven benign traffic against a
       42-server estate, with a staged intrusion unfolding after a 30-day clean
       baseline.
-    url: https://github.com/leogodin217/fabulexa_forge/releases/download/datasets-v4/security-logs.tar.gz
+    url: https://github.com/leogodin217/fabulexa_forge/releases/download/datasets-v5/security-logs.tar.gz
     sha256: facf293fd03eee7cf1d329a6f1720c5d2ec8ea85dfdb82439179b283e5778373
     size_bytes: 21158275
     base_format_version: 12
