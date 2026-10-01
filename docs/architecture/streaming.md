@@ -1045,7 +1045,11 @@ identical across both pacing modes — only wall-clock produce timing differs.
 replication factor 1, idempotently — **before** the first produce (broker auto-create is
 off). A topic that already exists with 1 partition is used as-is; one that exists with
 any other partition count is a `KafkaDeliveryError`, because the global-`seq` guarantee
-depends on a single partition and the sink never alters an existing topic. A topic that
+depends on a single partition and the sink never alters an existing topic. An existing
+topic's partition count is read from cluster metadata, re-read for a bounded settle
+window (~5s) because a just-created topic can lag into the broker's metadata cache; one
+still absent after that window is a `KafkaDeliveryError` — an unverifiable partition
+count fails closed. A topic that
 receives zero events is still created and still appears in
 `StreamOutcome.events_per_topic` with count 0 — the Kafka form of the
 declared-but-empty-topic guarantee (an empty topic, not an empty file). Partition count
