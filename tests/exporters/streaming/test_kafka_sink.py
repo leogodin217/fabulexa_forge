@@ -17,6 +17,7 @@ from fabulexa_forge.errors import (
     KafkaClientUnavailable,
     KafkaDeliveryError,
 )
+from fabulexa_forge.exporters.streaming import kafka_sink
 from fabulexa_forge.exporters.streaming.kafka_sink import resolve_bootstrap_servers
 
 from ._helpers import make_anchor as _shared_make_anchor
@@ -888,6 +889,8 @@ def test_preexisting_topic_absent_from_metadata_raises(
     spy_ck = _make_fake_ck(admin_cls=_GhostAdmin)
     monkeypatch.setitem(sys.modules, "confluent_kafka", spy_ck)
     monkeypatch.setitem(sys.modules, "confluent_kafka.admin", spy_ck.admin)
+    sleeps: list[float] = []
+    monkeypatch.setattr(kafka_sink.time, "sleep", sleeps.append)
 
     with pytest.raises(
         KafkaDeliveryError, match="'ghost_topic'.*absent from cluster metadata"
@@ -901,6 +904,55 @@ def test_preexisting_topic_absent_from_metadata_raises(
             topic_set=("ghost_topic",),
             paced=False,
         )
+    # The settle window is bounded: it gave up after a finite number of re-reads.
+    assert len(sleeps) == kafka_sink._METADATA_SETTLE_ATTEMPTS
+
+
+def test_preexisting_topic_metadata_lag_settles(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """TOPIC_ALREADY_EXISTS while metadata lags → re-read until it appears.
+
+    A just-created topic can be known to the controller before the broker's
+    metadata cache serves it. The guard re-reads within its settle window and,
+    once the topic appears with 1 partition, uses it as-is.
+    """
+    from fabulexa_forge.exporters.streaming.kafka_sink import write_kafka_stream
+
+    already_exists_error = _FakeKafkaException(_FakeKafkaError(36))
+
+    class _LaggingAdmin(_FakeAdminClient):
+        def __init__(self, cfg: dict[str, Any]) -> None:
+            super().__init__(
+                cfg,
+                topic_futures={"lag_topic": _make_topic_future(already_exists_error)},
+            )
+            self._reads = 0
+
+        def list_topics(self, timeout: float = 10.0) -> MagicMock:
+            # Absent on the first two reads, visible with 1 partition after.
+            self._reads += 1
+            if self._reads > 2:
+                self._existing_partitions = {"lag_topic": 1}
+            return super().list_topics(timeout)
+
+    spy_ck = _make_fake_ck(admin_cls=_LaggingAdmin)
+    monkeypatch.setitem(sys.modules, "confluent_kafka", spy_ck)
+    monkeypatch.setitem(sys.modules, "confluent_kafka.admin", spy_ck.admin)
+    sleeps: list[float] = []
+    monkeypatch.setattr(kafka_sink.time, "sleep", sleeps.append)
+
+    outcome = write_kafka_stream(
+        events=[],
+        render_value=_render_value,
+        render_key=_render_key,
+        render_timestamp=_render_timestamp,
+        bootstrap_servers="localhost:9092",
+        topic_set=("lag_topic",),
+        paced=False,
+    )
+    assert outcome.events_per_topic["lag_topic"] == 0
+    assert len(sleeps) == 2
 
 
 # ---------------------------------------------------------------------------

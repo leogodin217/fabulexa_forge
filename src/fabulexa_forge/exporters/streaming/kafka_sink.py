@@ -9,6 +9,7 @@ and resolve_clock (Principle #7: no invented default).
 from __future__ import annotations
 
 import sys
+import time
 from collections.abc import Callable, Iterable
 from typing import TYPE_CHECKING, Any
 
@@ -26,6 +27,11 @@ _KAFKA_BOOTSTRAP_UNRESOLVABLE_MSG = (
     "sink 'kafka' requires a bootstrap-servers address; set --bootstrap-servers,"
     " a kafka.bootstrap_servers config block, or FABEXPORT_KAFKA_BOOTSTRAP"
 )
+
+# Metadata re-reads for a topic the broker reports as already existing but whose
+# metadata has not propagated yet: up to ~5s before the guard fails closed.
+_METADATA_SETTLE_ATTEMPTS = 10
+_METADATA_SETTLE_INTERVAL_S = 0.5
 
 
 def resolve_bootstrap_servers(
@@ -141,10 +147,12 @@ def _ensure_topics(
 
     A topic that already exists with exactly 1 partition is used as-is. A topic
     with a partition count other than 1 raises KafkaDeliveryError naming the topic
-    and partition count. The check fails closed: a topic the broker reports as
-    already existing but that is absent from the re-read cluster metadata is an
-    error, not a pass — an unverifiable partition count must never reach the
-    producer, since per-topic ordering rests on the single-partition guarantee.
+    and partition count. A topic the broker reports as already existing is looked
+    up in re-read cluster metadata for a bounded settle window, since a freshly
+    created topic can lag into the broker's metadata cache. The check fails
+    closed: a topic still absent after that window is an error, not a pass — an
+    unverifiable partition count must never reach the producer, since per-topic
+    ordering rests on the single-partition guarantee.
 
     Args:
         AdminClient: The confluent_kafka.admin.AdminClient class.
@@ -155,8 +163,9 @@ def _ensure_topics(
 
     Raises:
         KafkaDeliveryError: Topic creation fails, a pre-existing topic has ≠ 1
-            partition, or a topic reported as already existing is absent from the
-            re-read cluster metadata (partition count unverifiable).
+            partition, or a topic reported as already existing is still absent
+            from the re-read cluster metadata after the settle window (partition
+            count unverifiable).
     """
     admin = AdminClient({"bootstrap.servers": bootstrap_servers})
     new_topics = [
@@ -170,11 +179,20 @@ def _ensure_topics(
             # TOPIC_ALREADY_EXISTS (error code 36) → check partition count
             err = exc.args[0]
             if err.code() == 36:  # TOPIC_ALREADY_EXISTS
+                # A just-created topic can be known to the controller before the
+                # broker's metadata cache serves it, so re-read for a bounded
+                # settle window before treating it as absent.
                 meta = admin.list_topics(timeout=10)
+                for _ in range(_METADATA_SETTLE_ATTEMPTS):
+                    if topic in meta.topics:
+                        break
+                    time.sleep(_METADATA_SETTLE_INTERVAL_S)
+                    meta = admin.list_topics(timeout=10)
                 if topic not in meta.topics:
-                    # Broker said the topic exists, yet metadata omits it — the
-                    # partition count is unverifiable. Fail closed: proceeding
-                    # would produce to a topic the guard never checked.
+                    # Broker said the topic exists, yet metadata still omits it
+                    # after the settle window — the partition count is
+                    # unverifiable. Fail closed: proceeding would produce to a
+                    # topic the guard never checked.
                     raise KafkaDeliveryError(
                         f"topic {topic!r} reported as already existing but absent"
                         f" from cluster metadata; cannot verify it has exactly 1"
