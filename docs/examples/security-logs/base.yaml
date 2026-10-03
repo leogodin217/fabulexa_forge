@@ -32,9 +32,11 @@
 #            stripped, created_sim_time -> created_at, each table's opaque
 #            id -> <table>_id, each compact self key -> <table>_key, and the
 #            reference pairs follow their targets (session.host_id/host_key,
-#            security_event.session_id/session_key). journey_type ->
-#            session_type; the sub-type discriminators -> host_type /
-#            asset_type.
+#            security_event.session_id/session_key, and the account's owner
+#            reference -> asset.owner_host_id/owner_host_key, with
+#            owner_hostname kept beside them as a readable label).
+#            journey_type -> session_type; the sub-type discriminators ->
+#            host_type / asset_type.
 #   EXCLUDE  nothing. All four kinds are domain data; the bundle declares no
 #            queue / resource mechanism kinds.
 #   RENDER   nothing. No prop__ column holds a date string or a raw
@@ -109,6 +111,8 @@ base:
         prop__service: service
         prop__account_name: account_name
         prop__account_type: account_type
+        prop__owner: owner_host_id
+        ref_index__owner: owner_host_key
         prop__owner_host: owner_hostname
         prop__rule_name: rule_name
         prop__src_zone: src_zone
@@ -131,6 +135,15 @@ base:
         prop__entity_type: >-
           Row category — server, account, or fw_rule; says which of this
           table's sparse columns apply to the row.
+        prop__owner: >-
+          Id of the host this account belongs to; join to host.host_id.
+          NULL on servers and firewall rules.
+        ref_index__owner: >-
+          Compact integer key of the host this account belongs to; join to
+          host.host_key. NULL on servers and firewall rules.
+        prop__owner_host: >-
+          Hostname of the owning host, kept as a readable label; join on
+          owner_host_id / owner_host_key. NULL on servers and firewall rules.
 
     - table: records__journey_instance
       name: session

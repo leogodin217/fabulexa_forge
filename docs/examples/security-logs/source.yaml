@@ -21,6 +21,11 @@
 #            `sub_types:` narrows ROWS, not columns, so each table enumerates
 #            `columns:` from its own sub_type_columns partition — without
 #            this, servers would carry account_name etc. at 100% NULL.
+#   OWNER    accounts.owner_host_id is the account's immutable `owner`
+#            reference (entity -> actor), rendered as the host's elected
+#            index — a real FK to hosts.id on all 117 accounts.
+#            owner_hostname stays as a readable label (what an auth log
+#            prints); join on the key.
 #   SIEM-REALISTIC (the bundle's premise: the attack signal is behavioral,
 #            never a label). Dropped everywhere:
 #            - hosts: role ('external' flat labels the four attackers),
@@ -115,9 +120,10 @@ source:
       kind: entity
       sub_types: [account]
       columns: [created_sim_time, active, deactivated_at, last_mutation_sim_time,
-                prop__account_name, prop__account_type, prop__owner_host,
-                prop__owner_first, prop__owner_last]
+                prop__account_name, prop__account_type, prop__owner,
+                prop__owner_host, prop__owner_first, prop__owner_last]
       rename:
+        prop__owner: owner_host_id
         prop__owner_host: owner_hostname
       description: >-
         One credential principal owned by one host.
@@ -125,6 +131,10 @@ source:
         record_index: >-
           Surrogate key for the account; join target of
           event_entities.entity_id (CAST to BIGINT).
+        prop__owner: Host this account belongs to; join to hosts.id.
+        prop__owner_host: >-
+          Hostname of the owning host, kept as a readable label; join on
+          owner_host_id.
         created_sim_time: Time the row was created.
         active: FALSE if the row was soft-deleted from inventory.
         deactivated_at: Time the row was retired from inventory; NULL while active.

@@ -75,6 +75,12 @@
 #   TYPE-1   dim_host / dim_account / dim_firewall_rule: remaining projected
 #            attributes are constant in this run (host breadth IS tracked but
 #            is dropped as ground truth, see above).
+#   OWNER    dim_account.owner_host_id is a real FK to dim_host, resolved
+#            through the account's immutable `owner` reference (entity ->
+#            actor; all 117 accounts carry one). owner_hostname stays beside
+#            it as a readable label: it is the hostname an auth log would
+#            print, and it lets a learner read an account row without a join.
+#            Join on the key, not the label.
 #   KEPT     all 121 hosts in dim_host, externals included. Their zone/subnet
 #            say 'external' — network position any log shows — but no column
 #            marks them hostile. Excluding them would dangle every FK their
@@ -194,7 +200,19 @@ dimensional:
             fact_security_event.account_id.
         - {name: account_name, from: prop__account_name}
         - {name: account_type, from: prop__account_type}
-        - {name: owner_hostname, from: prop__owner_host}
+        # the owning host: the account's immutable `owner` reference
+        # (entity -> actor), rendered as dim_host's elected record_index
+        - name: owner_host_id
+          fk: {to: dim_host, via: reference}
+          description: >-
+            Host this account belongs to; join to dim_host.host_id.
+            Populated on every account.
+        # readable label beside the key (see OWNER in the header)
+        - name: owner_hostname
+          from: prop__owner_host
+          description: >-
+            Hostname of the owning host, kept as a readable label; join on
+            owner_host_id.
         - {name: owner_first, from: prop__owner_first}
         - {name: owner_last, from: prop__owner_last}
 
