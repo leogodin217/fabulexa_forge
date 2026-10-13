@@ -131,6 +131,16 @@
 #            lifecycle milestones); dim_account_terms stays TIMESTAMP (an
 #            amendment takes effect at the review's instant, and the billing
 #            spec's as-of-month-end rule is written against instants).
+#   KEYED    dim_company / dim_user_status on [id, valid_from, status]: at
+#            date grain, same-day status changes (onboard-and-activate on one
+#            day; offboard on the activation day) put two versions on one
+#            (id, valid_from) — 226 such pairs on dim_company, 3,672 on
+#            dim_user_status over the run, never more than two and never the
+#            same status twice — so the version's identity within the day is
+#            its status. The two-column key refuses every windowed render
+#            (WindowKeyDuplicate); the three-column key is unique at every
+#            horizon and changes no exported row (the key is logical — row
+#            order is the grain's, not the key's).
 
 mode: dimensional
 
@@ -155,7 +165,7 @@ dimensional:
         grain: records
         kind: actor
         filter: {prop__actor_type: company}
-      key: [company_id, valid_from]
+      key: [company_id, valid_from, status]
       columns:
         - name: company_id
           from: presentation_id
@@ -526,7 +536,7 @@ dimensional:
         grain: records
         kind: actor
         filter: {prop__actor_type: user}
-      key: [user_id, valid_from]
+      key: [user_id, valid_from, status]
       columns:
         - name: user_id
           from: presentation_id

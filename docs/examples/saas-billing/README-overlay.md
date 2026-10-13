@@ -127,6 +127,14 @@ of the inherited query should be able to say which one it implements.
 - `dim_account.size_band` is the customer's **headcount** band (employees),
   not its seat count. Seats are read off `dim_user_status`; a segmentation
   by `size_band` will not track billable seats and is not meant to.
+- `(company_id, valid_from)` is **not unique** on `dim_company`, nor
+  `(user_id, valid_from)` on `dim_user_status`: their version windows are
+  date-grained, and a same-day status change (onboard-and-activate on one
+  day, offboard on the activation day) puts two versions on the same date —
+  the earlier one zero-length (`valid_from = valid_to`), so a half-open
+  `[valid_from, valid_to)` as-of join still matches exactly one row. The
+  version's identity is the three-part key `(id, valid_from, status)`;
+  deduping on id + date drops real history.
 
 ## table: custom_tier
 
