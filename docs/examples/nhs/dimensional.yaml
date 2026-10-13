@@ -8,7 +8,7 @@
 #
 #   DROPPED  queue — scheduler state (specialty priority queues), no clinical
 #            row grain. Declared under `exclude` as a guard.
-#   RESTORED tick_decision (116,450 rows). An earlier revision excluded it as
+#   RESTORED tick_decision (117,499 rows). An earlier revision excluded it as
 #            "engine bookkeeping" from the kind name alone; `record_roles`
 #            declares it a fact kind and its decision_type values ARE the
 #            clinical event stream (ed_arrival, triage, admission,
@@ -21,12 +21,12 @@
 #            so the domain partition is expressible as named tables — which
 #            is what an NHS warehouse actually ships (ECDS, APC, Outpatient,
 #            DM01, CWT), never a single "clinical events" table.
-#            The 947 waiting_list_deterioration events span THREE pathways
+#            The 999 waiting_list_deterioration events span THREE pathways
 #            (cancer / outpatient / surgical) and would cross-contaminate
 #            any process fact's filter, so they are their own cross-pathway
 #            fact carrying `pathway` via lookup.
 #   BRIDGES  the five binding roles of membership__tick_decision__bindings
-#            (23,708 rows) become five bridge facts, one per role
+#            (24,032 rows) become five bridge facts, one per role
 #            (`where: {elem__role_name: ...}`), each declaring a real FK to
 #            its reference catalogue: dx_test -> fact_diagnostic_test,
 #            admitted_meds -> fact_medication_administration (multi-pick —
@@ -63,20 +63,20 @@
 #            and the dim is Type-1.
 #   STATE    patient (QA F3): dim_patient carried the state of whatever
 #            episode the patient was currently in — 18 of its 29 columns —
-#            so clinical churn, not attribute change, drove 55,789 SCD-2
-#            rows over 15,060 patients (up to 28 versions of one person).
+#            so clinical churn, not attribute change, drove 56,075 SCD-2
+#            windows over 14,999 patients (up to 27 versions of one person).
 #            Split three ways on measured evidence:
-#            - TIMELINES -> facts. status (44,937 intervals), hai_status
-#              (19,374 intervals) and the FFT rating (2,085 recorded
+#            - TIMELINES -> facts. status (45,175 intervals), hai_status
+#              (19,295 intervals) and the FFT rating (2,149 recorded
 #              outcomes — the fft_invited event's context is stage-only,
 #              so this history series is the ONLY record of the answer)
 #              enter the star at their own grain: fact_patient_status,
 #              fact_hai_status, fact_fft_response below.
-#            - EVENT MIRRORS -> dropped. admission_count (2,797 flips =
-#              the 2,797 admission events), cancer_referred (2,271 = the
-#              cancer_referral events), surgical_referred (1,864 flips ~
-#              1,865 surgeon_assigned events), fft_invited (set on only
-#              259 of 2,223 invited patients; 1,545 carry a recorded
+#            - EVENT MIRRORS -> dropped. admission_count (2,875 flips =
+#              the 2,875 admission events), cancer_referred (2,266 = the
+#              cancer_referral events), surgical_referred (1,856 flips ~
+#              1,860 surgeon_assigned events), fft_invited (set on only
+#              269 of 1,824 invited patients; 1,542 carry a recorded
 #              outcome under fft_invited='no'). The clinical event facts
 #              already carry these processes at event grain.
 #            - SCRIPT FLAGS -> dropped as generator inputs (the same
@@ -85,9 +85,9 @@
 #              diagnostic_test_type, suspicious_finding,
 #              surgical_indicated, procedure_code, readmission_risk,
 #              admission_disposition are the patient's pre-assigned route,
-#              contradicted by outcomes — procedure_code on all 15,060
-#              patients while surgical_indicated='no' on 13,290;
-#              admission_disposition set on all 15,060 while only 1,951
+#              contradicted by outcomes — procedure_code on all 14,999
+#              patients while surgical_indicated='no' on 13,234;
+#              admission_disposition set on all 14,999 while only 1,944
 #              were ever admitted. What actually happened lives in the
 #              event facts and bridges.
 #            What remains on the dim is the patient: identity, demographics
@@ -96,7 +96,7 @@
 #   NO DIM   journey_instance: its records table is a tombstone (terminal
 #            state + completion flag; everything else slice_only). The value
 #            is its `history` series — current_state is the richest series in
-#            the bundle (~172k transitions) — so the kind enters the star as
+#            the bundle (~183k transitions) — so the kind enters the star as
 #            fact_pathway_state (below), not as a dimension.
 #
 # Facts — every grain family the bundle carries:
@@ -107,7 +107,7 @@
 #   fact_waiting_list_deterioration
 #                            (records grain)          the clinical event stream,
 #                            one fact per clinical process at decision grain —
-#                            all 116,450 decisions, each in exactly one fact
+#                            all 117,499 decisions, each in exactly one fact
 #   fact_diagnostic_test / fact_medication_administration / fact_ward_stay /
 #   fact_procedure / fact_theatre_session
 #                            (membership grain)       the five binding-role
@@ -127,12 +127,35 @@
 #   fact_fft_response        (history_point grain)    one row per recorded FFT
 #                            survey rating
 #
-# No SCD-2 dim remains. dim_patient is Type-1 like the other dims: with the
-# state columns gone, its only tracked properties (full_name, birth_date)
-# never change in this run — and SCD-2 windows version on the KIND's history,
-# not the projected columns, so keeping type2 would re-emit the same 55,789
-# windows as 40,729 pairs of identical adjacent versions. One row per patient
-# is the honest shape; if a run ever mutates names, revisit.
+# SCD-2   dim_patient (re-curated from Type-1 for the NHS performance-pack
+#         teaching track — the complex-queries flagship needs real as-of-join
+#         material and the classic SCD-2 traps on the patient dim). Versions
+#         window on the KIND's history, not the projected columns: 56,075
+#         version rows over 14,999 patients in this emit (verified: distinct
+#         change instants across all of actor's tracked properties). `status`
+#         is the ONE tracked property projected, so a large share of adjacent
+#         versions are identical in every visible column — hai_status, FFT
+#         bookkeeping, and the event-mirror flips drive windows this
+#         projection does not show. Counting rows is not counting patients;
+#         counting versions is not counting status changes; a patient
+#         attribute at event time is the [valid_from, valid_to) as-of join,
+#         never the current (valid_to IS NULL) version. All deliberate, all
+#         documented as traps in the README overlay. fact_patient_status
+#         remains the clean status timeline at its own grain; the dim's
+#         status column is the warehouse-realistic denormalization of it.
+#   ELECTED dim_patient windows at TIMESTAMP grain: clinical state moves
+#           within a day — 12,693 patient-days carry more than one version
+#           (up to 3), so date-grain windows would force a wider key and
+#           zero-length versions here. The instants need no such repair.
+#   KEYED   dim_patient on [patient_id, valid_from]: zero same-microsecond
+#           collisions across the kind's combined change instants, so the
+#           two-column key is unique over the full export AND at every
+#           windowed horizon (verified: a bounded --from/--to render passes
+#           the WindowKeyDuplicate guard with zero duplicate keys). At DAY
+#           grain the same pair is NOT unique — that is the overlay's
+#           same-day trap, by design, not a key defect. Contrast
+#           saas-billing's dims, whose date-grain windows need status in
+#           the key.
 #
 # Not every omission below is an author choice. `temporal_class: slice_only`
 # columns cannot be projected in any mode — that is why booking.attended_at
@@ -194,9 +217,10 @@
 # replace the engine-voiced inherited prose (identity minting, sim-time
 # lifecycle, decision/membership mechanics) with learner-voice descriptions,
 # and give every FK and derived measure a description of its own. Table-level
-# blurbs are sidecar-inherited with no override surface, so the ten event
-# facts, the bridges, and dim_consultant still open with engine narration —
-# a known leak.
+# blurbs are overridden the same way — every table below declares its own
+# `description:`, so no engine narration remains in the generated README or
+# manifest (the table-blurb leak an earlier revision of this header flagged
+# is closed; verified against the generated companions).
 #
 # Timestamps: no `rebase:` block, so the effective anchor is the sidecar's own
 # `runtime` (2023-01-01T00:00 UTC). `derived: {timestamp: ...}` columns render
@@ -204,24 +228,28 @@
 #   ELECTED  dim_patient.birth_date is a plain VARCHAR property, not a
 #            derived timestamp — the producer mints it upstream as a date
 #            string, never involving sim_time or the anchor. Verified all
-#            15,060 values match `%Y-%m-%d` with no exceptions
-#            (1922-07-05..2007-06-19), so it is declared via `date_parse`
+#            14,999 values match `%Y-%m-%d` with no exceptions
+#            (1922-03-28..2007-04-20), so it is declared via `date_parse`
 #            and reinterpreted as a real DATE rather than passed through as
 #            text.
 #
 # CALENDAR: dim_date spans 2023-01-01 .. 2028-12-31. The tape covers the three
 # calendar years 2023-2025 (UTC); the three years past it exist for
-# fact_booking.opening_date_key — 871 of the 9,322 bookings (all `confirmed`)
+# fact_booking.opening_date_key — 877 of the 9,322 bookings (all `confirmed`)
 # book an appointment slot opening after tape's end, the latest on
 # 2028-07-25, and a key outside dim_date is a refusal (DateRefOutOfRange), not
 # a NULL. Every instant in the star carries a date key beside it, named for
 # its stem (occurred_at -> occurred_date_key, entered_at -> entered_date_key),
 # NULL exactly where the instant is (an interval still open at tape's end), so
-# per-day / per-month / weekday counts read off the calendar by key. The dims
-# are Type-1 with no version window, so none carries one. birth_date is NOT
-# keyed: it is decades before the range — compare it as a DATE.
+# per-day / per-month / weekday counts read off the calendar by key.
+# dim_patient's SCD-2 window carries its own pair (valid_from_date_key /
+# valid_to_date_key); the other dims are Type-1 with no version window.
+# birth_date is NOT keyed: it is decades before the range — compare it as a
+# DATE.
 
 mode: dimensional
+
+readme_overlay: README-overlay.md
 
 date_dimension:
   from: "2023-01-01"
@@ -238,19 +266,23 @@ dimensional:
     kinds: [queue]
 
   tables:
-    # --- dim: patient — Type-1, identity + demographics + constant clinical
-    #     attributes only; per-episode state exports at its own grain (see
-    #     the STATE header note) ---
+    # --- dim: patient — the star's one SCD-2 dimension (see the SCD-2
+    #     header note): identity, demographics, constant clinical
+    #     attributes, plus `status` as the as-of surface; the clean state
+    #     timelines still export at their own grain (the STATE note) ---
     - name: dim_patient
       role: dim
-      scd: type1
+      scd: type2
       source:
         grain: records
         kind: actor
         filter: {prop__actor_type: default}
-      key: [patient_id]
-      description: "One row per patient: identity, demographics, and the
-        constant clinical attributes the atlas names."
+      key: [patient_id, valid_from]
+      description: "One row per patient version: identity, demographics, the
+        constant clinical attributes the atlas names, and the care status the
+        patient held while this version was current. Versions follow the
+        upstream record, not visible attribute change — adjacent versions can
+        be identical in every column but the validity window."
       columns:
         # the elected surface: the PAT_-prefixed hospital number (KEYS note)
         - {name: patient_id, from: presentation_id,
@@ -268,6 +300,25 @@ dimensional:
              4-plus; a heavier burden raises clinical priority and readmission
              risk."}
         - {name: frailty_band, from: prop__frailty_band}
+        # the one tracked property projected: the as-of surface of the
+        # fact_patient_status timeline (the SCD-2 header note)
+        - {name: status, from: prop__status,
+           description: "Care status the patient held while this version was
+             current (active, in_ed, admitted, ... recovered, deceased) — the
+             as-of surface of the fact_patient_status timeline. Read it
+             through the [valid_from, valid_to) window, never off the current
+             version."}
+        - {name: valid_from, derived: {scd_window: valid_from},
+           description: "When this version of the patient row took effect."}
+        - {name: valid_from_date_key, date_ref: {scd_window: valid_from},
+           description: "dim_date.date_key of the day this version took
+             effect."}
+        - {name: valid_to, derived: {scd_window: valid_to},
+           description: "When this version was superseded; NULL on the
+             patient's current version."}
+        - {name: valid_to_date_key, date_ref: {scd_window: valid_to},
+           description: "dim_date.date_key of the day this version was
+             superseded; NULL on the patient's current version."}
 
     # --- dim: consultant — Type-1 (allocated = state -> fact_consultant_caseload;
     #     queue = engine scheduler reference, not projected) ---
@@ -626,8 +677,8 @@ dimensional:
     # --- fact: HAI status (history_interval grain) — one row per
     #     infection-status interval (clear / colonized): the trust's
     #     hospital-acquired-infection burden over time. This timeline
-    #     exists nowhere else: safety_incident events (599) are not the
-    #     colonization changes (4,314). ---
+    #     exists nowhere else: safety_incident events (651) are not the
+    #     colonization changes (4,296). ---
     - name: fact_hai_status
       role: fact
       source:
@@ -661,8 +712,8 @@ dimensional:
 
     # --- fact: FFT response (history_point grain) — one row per recorded
     #     Friends & Family Test rating. A response is a point event, and
-    #     the `value:` predicate drops the 15,060 `not_given` seed
-    #     intervals, leaving the 2,093 recorded outcomes. The rating lives
+    #     the `value:` predicate drops the 14,999 `not_given` seed
+    #     intervals, leaving the 2,149 recorded outcomes. The rating lives
     #     ONLY in this history series: the fft_invited event's context is
     #     stage-only, so fact_fft has the invite but never the answer. ---
     - name: fact_fft_response
