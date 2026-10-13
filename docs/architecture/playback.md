@@ -51,7 +51,9 @@ which consumes the stream head and render surface
 
 **Inputs.** An open `Emit`; an atom `PlaybackSelection` (tier 1) or a
 validated `ExportConfig` shape (tier 2); a resolved `EffectiveAnchor | None`;
-and, for tier 2, a required `NoticeSink`. **Outputs.** Lazy `PlaybackEvent`
+and, for tier 2, a required `NoticeSink` and the config's loader-resolved
+supplements (a `ResolvedSupplement` sequence, the shape `load_supplements`
+produces — empty for a shape declaring none; § Shaped window). **Outputs.** Lazy `PlaybackEvent`
 iterators, `pyarrow` snapshot tables, and shaped relation tuples.
 **Non-inputs.** Nothing at the seam paces, buffers, pushes, connects to a
 sink, opens a session, or reads a clock — those are caller concerns above it
