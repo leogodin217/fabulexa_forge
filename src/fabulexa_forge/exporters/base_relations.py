@@ -25,15 +25,16 @@ def shadow_base_relations(sql: str, base_relations: "Mapping[str, str]") -> str:
     Emits ``WITH "<name>" AS (<replacing SELECT>), ... SELECT * FROM
     (<sql>)`` — a wrap, not a textual prefix, because sql may already open
     with its own WITH. Binding rules are contract (design doc § The compile
-    indirection, binding rules): a replacing relation's self-read binds
-    physical — DuckDB's binder treats a bare unqualified self-read as a
-    circular CTE reference, so the replacing SELECT schema-qualifies its
-    self-read (`main.<table>`) to reach the physical table (pinned by
-    test; the truncated-tape builders in `derivations/truncated_tape.py`
-    do this for every base table they replace); its cross-reads are
-    binding-insensitive by construction (the builders inline truncation
-    predicates); the compiled query's unqualified quoted reads shadow
-    totally.
+    indirection, binding rules): a replacing relation's *every* base-table
+    read is schema-qualified (`main.<table>`) and binds physical — the
+    self-read because DuckDB's binder treats a bare unqualified self-read
+    as a circular CTE reference, a cross-read because unqualified it would
+    bind the sibling CTE and a kind-reference cycle in the emit
+    (contract-legal) would become a circular CTE graph DuckDB refuses;
+    qualification is value-identical because the builders in
+    `derivations/truncated_tape.py` inline their truncation predicates
+    (both pinned by test); the compiled query's unqualified quoted reads
+    shadow totally.
 
     Args:
         sql: The compiled query (a complete SELECT, possibly opening with WITH).

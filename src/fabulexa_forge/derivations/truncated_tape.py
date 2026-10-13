@@ -182,7 +182,11 @@ def _build_recorded_trail(
     Membership activity is deliberately not a component. An emit whose
     sidecar declares no `history` table has no tracked history to read: the
     trail is then greatest(created_sim_time, deactivated_at when <= T) and
-    no join is composed.
+    no join is composed. The history read is schema-qualified
+    (`main."history"`) and binds physical — unqualified it would bind the
+    `"history"` CTE under the base_relations shadow wrap, a CTE-to-CTE edge
+    (see _build_ref_index_join); the inline `sim_time <= T` predicate makes
+    the physical read equal to the truncated one.
 
     Args:
         fork_path: The sole branch fork_path.
@@ -206,7 +210,7 @@ def _build_recorded_trail(
     kind_lit = _sql_literal(kind)
     join_sql = (
         f" LEFT JOIN ("
-        f'SELECT "record_id", MAX("sim_time") AS "max_sim_time" FROM "history"'
+        f'SELECT "record_id", MAX("sim_time") AS "max_sim_time" FROM main."history"'
         f' WHERE "fork_path" = {fp_lit} AND "kind" = {kind_lit}'
         f' AND "sim_time" <= {at_sim_time}'
         f' GROUP BY "record_id"'
@@ -254,26 +258,26 @@ def _build_ref_index_join(
     prop: str,
     value_expr: str,
     at_sim_time: int,
-    self_read: bool,
 ) -> tuple[str, str]:
     """Build the `ref_index__<prop>` re-derivation JOIN and expression.
 
     Resolves the reconstructed prop__<prop> value against the *truncated*
     target spine — records__<target_kind> filtered to fork_path and
     created_sim_time <= T inline (the one-consistent-truncated-world rule;
-    the cross-read carries its inline truncation predicate rather than
-    depending on any external binding) — projecting the matched row's
-    record_index. A LEFT JOIN: NULL beside a NULL reference, and NULL beside
-    a verbatim non-NULL reference that resolves to no truncated spine row
-    (dangling, mispointed, or naming a record created after T). The caller
-    has already verified records__<target_kind> is present in the sidecar;
-    on absence it projects a typed NULL instead of calling here.
+    the read carries its inline truncation predicate rather than depending
+    on any external binding) — projecting the matched row's record_index. A
+    LEFT JOIN: NULL beside a NULL reference, and NULL beside a verbatim
+    non-NULL reference that resolves to no truncated spine row (dangling,
+    mispointed, or naming a record created after T). The caller has already
+    verified records__<target_kind> is present in the sidecar; on absence
+    it projects a typed NULL instead of calling here.
 
-    When the target kind is the presented kind (a self-referencing kind),
-    the read is a self-read and binds the physical table
-    (`main."records__<kind>"`) like every other self-read — under the
-    base_relations shadow wrap an unqualified read would be a circular
-    reference to the CTE this relation defines. The inline predicate makes
+    The spine read is schema-qualified (`main."records__<target_kind>"`)
+    and binds physical, self- and cross-kind targets alike — see
+    build_truncated_history_sql for the self-read case; an *unqualified*
+    cross-kind read would bind the sibling CTE under the base_relations
+    shadow wrap, and a kind-reference cycle (contract-legal) would then
+    become a circular CTE graph DuckDB refuses. The inline predicate makes
     the physical read equal to the truncated one.
 
     Args:
@@ -285,7 +289,6 @@ def _build_ref_index_join(
         value_expr: The reconstructed prop__<prop> SQL expression (the
             reference's as-of record_id, or NULL).
         at_sim_time: The inclusive truncation position T (ns).
-        self_read: Whether target_kind is the kind this relation presents.
 
     Returns:
         A 2-tuple (join_sql, ref_expr): the LEFT JOIN clause and the
@@ -294,11 +297,8 @@ def _build_ref_index_join(
     """
     fp_lit = _sql_literal(fork_path)
     alias = f"_ref_{prop}"
-    target = f'"records__{target_kind}"'
-    if self_read:
-        target = f"main.{target}"
     join_sql = (
-        f' LEFT JOIN {target} AS "{alias}"'
+        f' LEFT JOIN main."records__{target_kind}" AS "{alias}"'
         f' ON "{alias}"."record_id" = {value_expr}'
         f' AND "{alias}"."fork_path" = {fp_lit}'
         f' AND "{alias}"."created_sim_time" <= {at_sim_time}'
@@ -340,10 +340,12 @@ def build_truncated_records_sql(
     projected as a typed NULL with no JOIN — the base layer's no-dangling-
     references guarantee means every reference to an absent kind is NULL,
     so this renders exactly what a producer slicing at T would have
-    emitted. The self-read is schema-qualified
-    (`main."records__<kind>"`) — see build_truncated_history_sql for why
-    (binds physical under the base_relations shadow wrap; unqualified would
-    be a circular CTE reference).
+    emitted. Every base-table read is schema-qualified and binds physical —
+    the `main."records__<kind>"` self-read (see build_truncated_history_sql
+    for why), and every cross-kind spine and history read too (see
+    _build_ref_index_join: an unqualified cross-read would bind a sibling
+    CTE under the base_relations shadow wrap, and a kind-reference cycle
+    would become a circular CTE graph).
 
     Args:
         sidecar: The open emit's sidecar.
@@ -407,7 +409,6 @@ def build_truncated_records_sql(
                     prop,
                     prop_value_exprs[prop],
                     at_sim_time,
-                    self_read=target_kind == kind,
                 )
                 joins.append(join_sql)
                 select_parts.append(f'{ref_expr} AS "{name}"')
