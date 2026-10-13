@@ -143,8 +143,19 @@
 #         documented as traps in the README overlay. fact_patient_status
 #         remains the clean status timeline at its own grain; the dim's
 #         status column is the warehouse-realistic denormalization of it.
-#         Zero same-microsecond collisions measured across the combined
-#         change instants, so [patient_id, valid_from] is unique.
+#   ELECTED dim_patient windows at TIMESTAMP grain: clinical state moves
+#           within a day — 12,693 patient-days carry more than one version
+#           (up to 3), so date-grain windows would force a wider key and
+#           zero-length versions here. The instants need no such repair.
+#   KEYED   dim_patient on [patient_id, valid_from]: zero same-microsecond
+#           collisions across the kind's combined change instants, so the
+#           two-column key is unique over the full export AND at every
+#           windowed horizon (verified: a bounded --from/--to render passes
+#           the WindowKeyDuplicate guard with zero duplicate keys). At DAY
+#           grain the same pair is NOT unique — that is the overlay's
+#           same-day trap, by design, not a key defect. Contrast
+#           saas-billing's dims, whose date-grain windows need status in
+#           the key.
 #
 # Not every omission below is an author choice. `temporal_class: slice_only`
 # columns cannot be projected in any mode — that is why booking.attended_at

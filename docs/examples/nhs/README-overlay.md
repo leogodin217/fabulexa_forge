@@ -177,6 +177,16 @@ variant query should be able to say which one it implements.
   column** (upstream infection-status and survey bookkeeping re-versioned
   the patient). `COUNT(*)` does not count patients; counting versions does
   not count status changes; `LAG` over `status` does.
+- **The window is timestamp-grain; the day is not the version.** 12,693
+  patient-days carry more than one `dim_patient` version (up to 3 — a
+  patient can be `in_ed` and `admitted` within one afternoon), so
+  `(patient_id, valid_from_date_key)` is **not** unique. As-of joins
+  compare instants — the event timestamp against
+  `[valid_from, valid_to)` — and joining or deduplicating at day grain
+  through the `*_date_key` columns collapses real same-day versions and
+  fans out events. (Unlike the saas-billing warehouse's date-grained
+  windows, there are no zero-length versions here: the instants carry the
+  order.)
 - **The current version is the tape's end, not "now".** Joining facts to
   `valid_to IS NULL` rows reads every patient's final status (mostly
   `discharged` / `recovered` / `active`, 78 `deceased`) into all of
