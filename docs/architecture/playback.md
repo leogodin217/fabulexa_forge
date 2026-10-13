@@ -403,19 +403,23 @@ horizon.
 reimplementation must honor. The mapping wraps the compiled query in one CTE
 per mapped name (`WITH history AS (<replacing SELECT>), ... SELECT * FROM
 (<compiled query>)`), a wrap because a compiled query may open with its own
-`WITH`. Three binding rules make it correct under DuckDB's binder:
+`WITH`. Two binding rules make it correct under DuckDB's binder:
 
-1. **A replacing relation's self-read binds physical.** A bare unqualified
-   self-read is a circular CTE reference, so each replacing SELECT
-   schema-qualifies its self-read (`main.<table>`) to reach the physical table.
-   A test pins this so an engine upgrade cannot silently rebind it.
-2. **Cross-reads are binding-insensitive by construction.** A replacing
-   SELECT's read of a *different* base table inlines its own truncation
-   predicate (`sim_time ≤ T`, `created_sim_time ≤ T`); because every column
-   such a read touches is verbatim under truncation, the result is identical
-   whether the engine binds the name to a sibling CTE or the physical table —
-   so mutually-referencing kinds cannot cycle.
-3. **The mode's reads shadow totally.** Base tables are always read as
+1. **A replacing relation's every base-table read binds physical.** Each
+   replacing SELECT schema-qualifies every base table it reads
+   (`main.<table>`) — the self-read because a bare unqualified self-read is a
+   circular CTE reference under DuckDB's binder, and every cross-read because
+   unqualified it would bind the *sibling CTE*, turning a kind-reference cycle
+   in the emit (contract-legal: `actor.prop__company → entity`,
+   `entity.prop__company → actor`) into a circular CTE graph the binder
+   refuses. Qualification is value-identical: a replacing SELECT's read
+   inlines its own truncation predicate (`sim_time ≤ T`,
+   `created_sim_time ≤ T`) and touches only columns verbatim under
+   truncation, so the physical read equals the truncated presentation. With
+   no CTE-to-CTE edge at all, cycles are impossible for any kind graph. Tests
+   pin both the self-read and the cross-read so an engine upgrade cannot
+   silently rebind either.
+2. **The mode's reads shadow totally.** Base tables are always read as
    unqualified quoted identifiers (`FROM "history"`) — schema-qualification is
    barred — and no internal CTE alias may equal a physical base-table name (the
    underscore-prefixed alias convention, load-bearing here).

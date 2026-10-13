@@ -5,7 +5,9 @@ Covers: dimensional's `base_relations=None` byte-identical to the
 unparameterized compile, and (source) the plan/engine's compiled SQL
 matching the render function called directly; `shadow_base_relations`'s CTE
 wrap, including a compiled query that already opens with its own `WITH`;
-the self-read-binds-physical binding rule; total shadowing across a
+the every-base-read-binds-physical binding rule (self-read and cross-read,
+the latter so a kind-reference cycle cannot become a circular CTE graph);
+total shadowing across a
 dimensional FK hop (via `build_query_specs`'s own `base_relations`
 parameter) and a source change-log read (history + records spine, via the
 playback seam's post-compile `_rewrite_specs_base_relations` — the source
@@ -181,7 +183,7 @@ def test_apply_base_relations_wraps_when_given() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Binding rule: a replacing relation's self-read binds physical
+# Binding rule: a replacing relation's every base-table read binds physical
 # ---------------------------------------------------------------------------
 
 
@@ -210,6 +212,52 @@ def test_replacing_relations_self_read_binds_physical(tmp_path: Path) -> None:
     # table, this would either error (no base case) or return an empty/wrong
     # result; binding physical yields exactly the two rows <= 15.
     assert rows == [(5, "a"), (15, "b")]
+
+
+def test_replacing_relations_cross_read_binds_physical(tmp_path: Path) -> None:
+    """A replacing SELECT reading a *different* mapped base table
+    schema-qualifies that read too (`main.<table>`), binding physical.
+
+    An unqualified cross-read binds the sibling CTE, so two replacing
+    relations reading each other — a legal kind-reference cycle in the
+    emit — would form a circular CTE graph DuckDB refuses. This pins both
+    halves so an engine upgrade cannot silently rebind either: the
+    qualified cyclic mapping executes and reads physical (truncated-value)
+    rows; the unqualified one is a binder error."""
+    db_path = tmp_path / "run.duckdb"
+    con = duckdb.connect(str(db_path))
+    con.execute('CREATE TABLE "records__actor" (record_id VARCHAR, t BIGINT)')
+    con.execute('CREATE TABLE "records__entity" (record_id VARCHAR, t BIGINT)')
+    con.execute("INSERT INTO \"records__actor\" VALUES ('a1', 5), ('a2', 25)")
+    con.execute("INSERT INTO \"records__entity\" VALUES ('e1', 10), ('e2', 30)")
+
+    def mapping(qualify: str) -> dict[str, str]:
+        # Each replacing relation cross-reads the other base table, its
+        # truncation predicate inlined (t <= 15) — the builders' shape.
+        return {
+            "records__actor": (
+                f'SELECT * FROM main."records__actor" WHERE t <= 15 AND EXISTS'
+                f' (SELECT 1 FROM {qualify}"records__entity" WHERE t <= 15)'
+            ),
+            "records__entity": (
+                f'SELECT * FROM main."records__entity" WHERE t <= 15 AND EXISTS'
+                f' (SELECT 1 FROM {qualify}"records__actor" WHERE t <= 15)'
+            ),
+        }
+
+    wrapped = shadow_base_relations(
+        'SELECT record_id FROM "records__actor"'
+        ' UNION ALL SELECT record_id FROM "records__entity" ORDER BY record_id',
+        mapping(qualify="main."),
+    )
+    rows = con.execute(wrapped).fetchall()
+    assert rows == [("a1",), ("e1",)]
+
+    unqualified = shadow_base_relations(
+        'SELECT record_id FROM "records__actor"', mapping(qualify="")
+    )
+    with pytest.raises(duckdb.BinderException, match="Circular reference to CTE"):
+        con.execute(unqualified)
 
 
 # ---------------------------------------------------------------------------

@@ -544,3 +544,97 @@ class TestSelfReferencingKind:
             )
             rows = emit.query(sql, ())
         assert rows == [("n1", None, None), ("n2", "n1", 0)]
+
+
+# ---------------------------------------------------------------------------
+# A two-kind reference cycle under the base_relations shadow wrap
+# (regression: unqualified cross-reads bound the sibling CTE, so a legal
+# kind-reference cycle became DuckDB "Circular reference to CTE")
+# ---------------------------------------------------------------------------
+
+
+def _cyclic_kind_cols(other_kind: str, ref_prop: str) -> list[dict[str, Any]]:
+    """Column shape for one kind of the person<->org reference cycle."""
+    return [
+        identity_column("fork_path", "VARCHAR"),
+        identity_column("record_id", "VARCHAR"),
+        {"name": "created_sim_time", "type": "BIGINT"},
+        {"name": "active", "type": "BOOLEAN"},
+        {"name": "deactivated_at", "type": "BIGINT"},
+        {"name": "last_mutation_sim_time", "type": "BIGINT"},
+        identity_column("record_index", "BIGINT"),
+        prop_column(
+            f"prop__{ref_prop}",
+            "VARCHAR",
+            history_tracked=False,
+            temporal_class="constant",
+            references=other_kind,
+        ),
+        identity_column(f"ref_index__{ref_prop}", "BIGINT"),
+    ]
+
+
+_PERSON_COLS = _cyclic_kind_cols("org", "org")
+_ORG_COLS = _cyclic_kind_cols("person", "owner")
+
+#: p1 (day 10) -> o1; p2 (day 200, after T) -> o1
+_PERSON_ROWS: list[tuple[Any, ...]] = [
+    (FORK_PATH, "p1", 10, True, None, 10, 0, "o1", 0),
+    (FORK_PATH, "p2", 200, True, None, 200, 1, "o1", 0),
+]
+#: o1 (day 5) -> p1; o2 (day 150, after T) -> p2
+_ORG_ROWS: list[tuple[Any, ...]] = [
+    (FORK_PATH, "o1", 5, True, None, 5, 0, "p1", 0),
+    (FORK_PATH, "o2", 150, True, None, 150, 1, "p2", 1),
+]
+
+
+def _build_cyclic_reference_emit(tmp_path: Path) -> Path:
+    """Two kinds whose reference properties point at each other —
+    contract-legal (the base format allows reference cycles)."""
+    db_path = tmp_path / "run.duckdb"
+    conn = duckdb.connect(str(db_path))
+    for table, cols, rows in (
+        ("records__person", _PERSON_COLS, _PERSON_ROWS),
+        ("records__org", _ORG_COLS, _ORG_ROWS),
+    ):
+        conn.execute(_ddl(table, cols))
+        ph = ", ".join("?" for _ in cols)
+        for row in rows:
+            conn.execute(f'INSERT INTO "{table}" VALUES ({ph})', list(row))
+    conn.close()
+    write_emit(
+        tmp_path,
+        tables=[
+            _table_spec("records__person", _PERSON_COLS, len(_PERSON_ROWS), "person"),
+            _table_spec("records__org", _ORG_COLS, len(_ORG_ROWS), "org"),
+        ],
+    )
+    return tmp_path
+
+
+class TestCyclicKindReference:
+    def test_two_kind_cycle_answers_under_shadow_wrap(self, tmp_path: Path) -> None:
+        """Both kinds' replacing relations coexist as CTEs with no CTE-to-CTE
+        edge (every base read schema-qualified), so the cycle compiles and
+        each ref_index__ re-derives against the truncated world: a reference
+        to a record created after T re-derives NULL."""
+        emit_dir = _build_cyclic_reference_emit(tmp_path)
+        with open_emit(emit_dir) as emit:
+            tape = open_truncated_tape(emit.sidecar, FORK_PATH, AT_SIM_TIME)
+            person_sql = shadow_base_relations(
+                'SELECT "record_id", "prop__org", "ref_index__org"'
+                ' FROM "records__person" ORDER BY "record_id"',
+                tape.base_relations,
+            )
+            org_sql = shadow_base_relations(
+                'SELECT "record_id", "prop__owner", "ref_index__owner"'
+                ' FROM "records__org" ORDER BY "record_id"',
+                tape.base_relations,
+            )
+            person_rows = emit.query(person_sql, ())
+            org_rows = emit.query(org_sql, ())
+        # p2 (created after T) is gone; p1's reference resolves to o1.
+        assert person_rows == [("p1", "o1", 0)]
+        # o2 (created after T) is gone; o1's reference resolves to p1.
+        assert org_rows == [("o1", "p1", 0)]

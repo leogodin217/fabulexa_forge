@@ -141,6 +141,15 @@ def build_history_asof_join(
     pattern, parameterized by the bound's inclusivity, so it never drifts
     between the two point-in-time reconstructions.
 
+    The history read is schema-qualified (`main."history"`) and binds
+    physical: truncated_tape.py composes this join inside a replacing
+    relation that runs as a CTE under the base_relations shadow wrap, where
+    an unqualified read would bind the `"history"` CTE — a CTE-to-CTE edge
+    (binding rules, exporters/base_relations.py). Value-identical there
+    because the truncated-tape caller inlines its `sim_time <= T` bound;
+    state_at.py's compiles never run under the wrap, where `main."history"`
+    is simply the physical table.
+
     Args:
         fork_path: The sole branch fork_path.
         kind: The record kind.
@@ -172,7 +181,7 @@ def build_history_asof_join(
         f" ROW_NUMBER() OVER ("
         f'PARTITION BY "record_id" ORDER BY "sim_time" DESC'
         f') AS "_rn"'
-        f' FROM "history"'
+        f' FROM main."history"'
         f' WHERE "fork_path" = {fp_lit} AND "kind" = {kind_lit}'
         f' AND "property" = {prop_lit}{bound_predicate}'
         f') AS "_ranked" WHERE "_rn" = 1'
