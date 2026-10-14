@@ -1,0 +1,157 @@
+# ExportConfig — airline-ops bundle, base mode (flat current-state dump)
+# ============================================================
+# `fabulexa-forge export docs/examples/airline-ops/bundle docs/examples/airline-ops/base.yaml <out> --fmt duckdb`
+#
+# Base mode reconstructs one flat table per records kind at the tape's end:
+# every tracked property (crew status and sickness count, lifecycle
+# current_state, the pools' capacity/allocated) carries its LATEST history
+# value. No sub-type split, no FK resolution — the faithful "current state of
+# every record" landing shape. `record_id` presents as `id`.
+#
+# Two author decisions here: which kinds to drop, and what everything is
+# CALLED. The `rename` entries below relabel every table and column into the
+# carrier's vocabulary; base never splits a kind, so `actor` — crew pairings
+# AND flight legs in one table, discriminated by `unit_type` — lands as
+# `operating_unit`, and `resource` — tails AND duty stations, discriminated
+# by `asset_type` — lands as `asset` (the same words source.yaml's
+# kind_labels use).
+#
+# We exclude the two simulation-MECHANISM kinds:
+#   tick_decision — the engine's decision log. `prop__context` is the empty
+#                   JSON object on all 8,197 rows (measured), and every
+#                   decision_type mirrors a lifecycle state entry the
+#                   lifecycle table's history already drove. An audit trail
+#                   of the simulator, not the carrier.
+#   queue         — the four per-base pool-config records. The waits they
+#                   govern are domain-real, but membership tables are not
+#                   part of base's records-kind dump either way, and the
+#                   config rows alone carry no current-state value here
+#                   (source.yaml ships them as dispatch_pool, where
+#                   pool_wait joins them).
+#
+# TIMESTAMPS: no `rebase:` is declared, but lifecycle columns still land as
+# wallclock TIMESTAMPs — the sidecar carries a `runtime` anchor
+# (2026-03-02T00:00:00 UTC) and base renders through the effective anchor.
+# Domain `prop__` columns are presentation-verbatim at their declared types.
+#
+# SLICE_ONLY: every non-exempt `temporal_class: slice_only` column is
+# auto-omitted export-wide with a notice — here actor has none, resource
+# loses `retiring`, journey_instance loses `state_entry_time` / `complete`.
+# Their past is unknowable, so base will not present them.
+
+mode: base
+
+base:
+  exclude:
+    kinds: [tick_decision, queue]
+
+  rename:
+    - table: records__actor
+      name: operating_unit
+      description: "A crew pairing or a scheduled flight leg, discriminated by unit_type — the two populations the carrier operates."
+      columns:
+        record_index: unit_key
+        presentation_id: unit_code
+        created_sim_time: created_at
+        prop__actor_type: unit_type
+        prop__base: base
+        prop__role: role
+        prop__constitution: constitution
+        prop__status: status
+        prop__sickness_episodes: sickness_episodes
+        prop__bank: departure_bank
+        prop__route_class: route_class
+      descriptions:
+        record_id: "Unique identifier for the pairing or leg."
+        record_index: "Unique numeric key, assigned in creation order across both unit types."
+        presentation_id: "The unit's public code: PRG-nnnn for a crew pairing, FXnnnn for a flight leg."
+        created_sim_time: "When the unit entered the system — payroll start for a pairing, schedule entry for a leg."
+        active: "TRUE while the unit is live; FALSE once a pairing resigned or a leg closed out."
+        deactivated_at: "When the unit closed; NULL while live."
+        prop__actor_type: "Whether this row is a crew pairing or a flight leg."
+        prop__base: "Station the unit belongs to: east or west."
+        prop__role: "Crew rows: lineholder or reserve; NULL on leg rows."
+        prop__constitution: "Crew rows: the generator's sickness-propensity class (robust, typical, fragile); NULL on leg rows. A simulation input, carried verbatim by this raw dump — the curated exports drop it."
+        prop__status: "Crew rows: HR status (onboarding, active, notice, resigned); NULL on leg rows."
+        prop__sickness_episodes: "Crew rows: sickness episodes recorded to date; NULL on leg rows."
+        prop__bank: "Leg rows: departure bank (am or pm); NULL on crew rows."
+        prop__route_class: "Leg rows: haul class (short, medium, long); NULL on crew rows."
+
+    - table: records__entity
+      name: destination
+      description: "An airport the carrier serves — the catalogue legs plan destinations from."
+      columns:
+        record_index: destination_key
+        created_sim_time: created_at
+        prop__entity_type: destination_type
+        prop__code: airport_code
+        prop__city: city
+        prop__route_class: route_class
+        prop__popularity: popularity
+      descriptions:
+        record_id: "Unique identifier for the airport."
+        record_index: "Unique numeric key for the airport, assigned in creation order."
+        created_sim_time: "When the airport entered the network."
+        active: "TRUE while the airport is served."
+        deactivated_at: "When the airport left the network; NULL while served."
+        prop__entity_type: "What kind of catalogue row this is; every row here is a destination."
+        prop__code: "IATA-style three-letter airport code."
+        prop__city: "City the airport serves."
+        prop__route_class: "Haul class of routes to this airport: short, medium, or long."
+        prop__popularity: "Relative demand weighting (1-5) used when legs plan a destination."
+
+    - table: records__journey_instance
+      name: lifecycle
+      description: "One process instance — a leg's flight lifecycle, or a pairing's roster, sickness, or employment lifecycle — at its current state."
+      columns:
+        record_index: lifecycle_key
+        created_sim_time: created_at
+        prop__actor: subject_id
+        ref_index__actor: subject_key
+        prop__journey_type: process
+        prop__current_state: current_state
+      descriptions:
+        record_id: "Unique identifier for the lifecycle record."
+        record_index: "Unique numeric key for the lifecycle record, assigned in creation order."
+        created_sim_time: "When the process began."
+        active: "TRUE while the process is running; FALSE once it reached a terminal state."
+        deactivated_at: "When the process finished; NULL while running."
+        prop__actor: "The pairing or leg walking this process; joins operating_unit.id."
+        ref_index__actor: "Numeric key of the pairing or leg; joins operating_unit.unit_key."
+        prop__journey_type: "Which process this is: flight, roster, sickness, or employment."
+        prop__current_state: "The state the process occupies at the end of the quarter."
+
+    - table: records__resource
+      name: asset
+      description: "A capacity asset the carrier allocates: a tail in the fleet, or a crew pairing's duty station, discriminated by asset_type."
+      columns:
+        record_index: asset_key
+        presentation_id: asset_code
+        created_sim_time: created_at
+        prop__resource_type: asset_type
+        prop__tail_number: tail_number
+        prop__base: base
+        prop__role: role
+        prop__owner: pairing_id
+        ref_index__owner: pairing_key
+        prop__capacity: capacity
+        prop__allocated: allocated
+        prop__queue: pool_id
+        ref_index__queue: pool_key
+      descriptions:
+        record_id: "Unique identifier for the tail or station."
+        record_index: "Unique numeric key, assigned in creation order across both asset types."
+        presentation_id: "Station rows: the station code (DS-nnnn); NULL on tail rows (tails are identified by tail_number)."
+        created_sim_time: "When the asset entered service."
+        active: "TRUE while the asset is live; FALSE once retired."
+        deactivated_at: "When the asset was retired; NULL while live."
+        prop__resource_type: "Whether this row is an aircraft or a duty_station."
+        prop__tail_number: "Tail rows: the aircraft's registration; NULL on station rows."
+        prop__base: "Base the asset belongs to: east or west."
+        prop__role: "Station rows: the pairing's roster role (lineholder or reserve); NULL on tail rows."
+        prop__owner: "Station rows: the crew pairing the station represents; joins operating_unit.id. NULL on tail rows."
+        ref_index__owner: "Station rows: numeric key of the owning pairing; joins operating_unit.unit_key. NULL on tail rows."
+        prop__capacity: "Slots on the asset (1; 0 once a resigned pairing's station wound down)."
+        prop__allocated: "Slots currently held."
+        prop__queue: "Identifier of the pool queue governing this asset's waiters; the pool records themselves are not part of this export."
+        ref_index__queue: "Numeric key of the governing pool; its table is not part of this export."

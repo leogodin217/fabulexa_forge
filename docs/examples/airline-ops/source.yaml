@@ -1,0 +1,395 @@
+# ExportConfig — airline-ops bundle, source mode (operational OLTP tables)
+# ============================================================
+# `fabulexa-forge export docs/examples/airline-ops/bundle docs/examples/airline-ops/source.yaml <out> --fmt duckdb`
+#
+# Source mode DECLARES its own output shape (docs/architecture/source.md):
+# each `tables[]` entry is a `state` table (current-state, one row per record)
+# over a `kind:`, or a `junction` over a `membership:` reference. History is
+# opt-in through the single polymorphic `events:` log.
+#
+# The target: the carrier's own ops + crew-management database. The mapping
+# from the engine's ontology — read from the atlas and `sub_type_columns`,
+# measured against THIS emit:
+#
+#   actor/crew          -> crew_pairing     (34 — the rostered crew units)
+#   actor/flight        -> flight_leg       (5,759 scheduled legs)
+#   entity/destination  -> destination      (12 airports)
+#   resource/aircraft   -> aircraft         (20 tails)
+#   resource/duty_station -> duty_station   (34 — one per pairing; its owner
+#                                            reference is the HR<->ops bridge)
+#   queue               -> dispatch_pool    (4 per-base pools: config rows a
+#                                            real dispatch system would have)
+#   journey_instance    -> lifecycle        (5,859 process instances)
+#   holders  (aircraft) -> tail_hold        (5,729 tail assignments)
+#   holders  (stations) -> station_hold     (7,713 station holds: legs flying
+#                                            a pairing, and the pairing's own
+#                                            off-duty/stand-down holds)
+#   waiters             -> pool_wait        (3,583 queue positions — the
+#                                            emergent-delay data)
+#   presence            -> crew_presence    (2,142 duty / sick / muster claims)
+#   bound_roles         -> role_binding     (19,236 role bindings per
+#                                            lifecycle: dest, tail, crew_seat,
+#                                            and the roster-mechanism roles)
+#   the event log       -> audit_log
+#
+#   SPLIT   holders -> tail_hold + station_hold via the junction's owner
+#           `sub_types` — the two pools are different business facts (fleet
+#           rotation vs crew availability) and splitting keeps each table's
+#           owner id one population.
+#   KEPT    dispatch_pool: dimensional drops the queue kind as mechanism, but
+#           an app database HAS the pool-config table (discipline, full-pool
+#           policy, base) and pool_wait.pool_id needs a join target.
+#   DROPPED tick_decision and its bindings table: `prop__context` is the
+#           empty JSON object on all 8,197 rows (measured), every
+#           decision_type mirrors a lifecycle state entry the audit_log
+#           already carries, and its bindings carry only the `dest` role,
+#           which role_binding also carries. Omission is source's exclusion
+#           mechanism.
+#   DROPPED crew `constitution` (robust/typical/fragile): the generator's
+#           sickness-propensity input, not an HR attribute any airline
+#           database would hold. The OBSERVED sickness record stays
+#           (sickness_episodes, crew_presence, the audit stream).
+#   KEYS    every exported kind elects `record_index` (the `keys:` block):
+#           each state table's `id` is a compact BIGINT and every
+#           referencing surface — lifecycle.subject_id, the junctions' owner
+#           and member columns, duty_station.pairing_id, the audit log's
+#           item_id — renders the same election. The minted codes
+#           (PRG-nnnn pairing codes, FXnnnn flight numbers, DS-nnnn station
+#           codes) stay as standalone natural-key columns.
+#   HYGIENE mechanism internals stay out: the engine's scheduling-queue
+#           reference on aircraft / duty_station (`queue`), the holds' and
+#           waits' preemption rule ids, the waits' `eligible` server list
+#           and `requested_count` (1 on every row), the holds' `slots_held`
+#           (1 on every row — capacity-1 pools), the bindings' `pick_index`
+#           (0 on every row). `elem__claim` / `elem__on_acquired_rule` STAY:
+#           they say what business process a hold or wait belongs to.
+#   LABELS  kind_labels renders the junctions' member-kind discriminators in
+#           domain words (entity -> destination, resource -> asset, actor ->
+#           operating_unit); identity values are untouched.
+#
+# COLUMNS: `sub_types:` narrows ROWS, not columns — every state table
+# enumerates `columns:` from its own `sub_type_columns` partition, prefixed
+# by the record lifecycle quartet (created_sim_time, active, deactivated_at,
+# last_mutation_sim_time -> created_at / active / deactivated_at /
+# updated_at via rename).
+#
+# A `temporal_class: slice_only` column is auto-omitted with a notice
+# whatever this config says — here resource.retiring and
+# journey_instance.state_entry_time / complete. The notice lines are the
+# authoritative list.
+#
+# History is opt-in and tracked-ness decides who is audited: actor/crew
+# (status, sickness_episodes), journey_instance (current_state — the
+# operational changelog), resource (capacity, allocated — the two pools'
+# live occupancy). entity.city is tracked but never changes in this emit;
+# it is audited with the rest of nothing (left out via `only`).
+#
+# Source requires a resolved wallclock anchor; none is declared here, so it
+# falls back to the sidecar `runtime` (2026-03-02T00:00:00 UTC) — the emit's
+# own clock. Uncomment `rebase:` to override.
+
+mode: source
+
+keys:
+  actor: record_index
+  entity: record_index
+  resource: record_index
+  journey_instance: record_index
+  queue: record_index
+
+source:
+  kind_labels:
+    actor: operating_unit
+    entity: destination
+    resource: asset
+
+  tables:
+    - name: crew_pairing
+      kind: actor
+      sub_types: [crew]
+      description: "A crew pairing (captain + first officer rostered as one unit) on the payroll, with its HR status and sickness record."
+      columns: [created_sim_time, active, deactivated_at, last_mutation_sim_time,
+                presentation_id, prop__base, prop__role, prop__status,
+                prop__sickness_episodes]
+      rename:
+        created_sim_time: created_at
+        last_mutation_sim_time: updated_at
+        presentation_id: pairing_code
+        prop__base: base
+        prop__role: role
+        prop__status: status
+        prop__sickness_episodes: sickness_episodes
+      descriptions:
+        record_index: "Unique numeric identifier for the pairing, assigned in creation order."
+        created_sim_time: "When the pairing joined the payroll."
+        active: "TRUE while the pairing is on the payroll; FALSE once resigned and closed out."
+        deactivated_at: "When the pairing left the payroll; NULL while employed."
+        last_mutation_sim_time: "When the pairing row was last updated."
+        presentation_id: "The pairing's roster code (PRG-nnnn)."
+        prop__base: "Station the pairing reports at: east or west."
+        prop__role: "Roster role: lineholder (flies the published line) or reserve (called out when a leg loses its crew)."
+        prop__status: "HR lifecycle status: onboarding, active, notice, or resigned."
+        prop__sickness_episodes: "Sickness episodes recorded against the pairing to date."
+
+    - name: flight_leg
+      kind: actor
+      sub_types: [flight]
+      description: "A scheduled leg: an out-and-back rotation from its base, entered on the published schedule."
+      columns: [created_sim_time, active, deactivated_at, last_mutation_sim_time,
+                presentation_id, prop__base, prop__bank, prop__route_class]
+      rename:
+        created_sim_time: created_at
+        last_mutation_sim_time: updated_at
+        presentation_id: flight_number
+        prop__base: base
+        prop__bank: departure_bank
+        prop__route_class: route_class
+      descriptions:
+        record_index: "Unique numeric identifier for the leg, assigned in creation order."
+        created_sim_time: "When the leg entered the published schedule."
+        active: "TRUE while the leg is still in motion; FALSE once completed or cancelled."
+        deactivated_at: "When the leg closed out; NULL for legs still in motion at quarter end."
+        last_mutation_sim_time: "When the leg row was last updated."
+        presentation_id: "The leg's flight number (FXnnnn)."
+        prop__base: "Station the rotation departs from and returns to: east or west."
+        prop__bank: "Which departure bank the leg is scheduled in: am or pm."
+        prop__route_class: "Haul class of the leg: short, medium, or long."
+
+    - name: destination
+      kind: entity
+      description: "An airport the carrier serves — the catalogue legs plan destinations from, filtered by route class."
+      columns: [created_sim_time, active, deactivated_at, last_mutation_sim_time,
+                prop__code, prop__city, prop__route_class, prop__popularity]
+      rename:
+        created_sim_time: created_at
+        last_mutation_sim_time: updated_at
+        prop__code: airport_code
+        prop__city: city
+        prop__route_class: route_class
+        prop__popularity: popularity
+      descriptions:
+        record_index: "Unique numeric identifier for the airport, assigned in creation order."
+        created_sim_time: "When the airport entered the carrier's network."
+        active: "TRUE while the airport is served."
+        deactivated_at: "When the airport left the network; NULL while served."
+        last_mutation_sim_time: "When the airport row was last updated."
+        prop__code: "IATA-style three-letter airport code."
+        prop__city: "City the airport serves."
+        prop__route_class: "Haul class of routes to this airport: short, medium, or long."
+        prop__popularity: "Relative demand weighting (1-5) used when legs plan a destination."
+
+    - name: aircraft
+      kind: resource
+      sub_types: [aircraft]
+      description: "A tail in the fleet, based at one station, held by one leg at a time for block plus turnaround (plus repair on a fault)."
+      columns: [created_sim_time, active, deactivated_at, last_mutation_sim_time,
+                prop__tail_number, prop__base, prop__capacity, prop__allocated]
+      rename:
+        created_sim_time: created_at
+        last_mutation_sim_time: updated_at
+        prop__tail_number: tail_number
+        prop__base: base
+        prop__capacity: capacity
+        prop__allocated: allocated
+      descriptions:
+        record_index: "Unique numeric identifier for the tail, assigned in creation order."
+        created_sim_time: "When the tail joined the fleet."
+        active: "TRUE while the tail is in service."
+        deactivated_at: "When the tail left the fleet; NULL while in service."
+        last_mutation_sim_time: "When the tail row was last updated."
+        prop__tail_number: "The aircraft's registration (tail number)."
+        prop__base: "Station the tail is based at: east or west."
+        prop__capacity: "Slots on this tail (1 — one leg flies it at a time)."
+        prop__allocated: "Slots currently held: 1 while a leg is flying or turning it, else 0."
+
+    - name: duty_station
+      kind: resource
+      sub_types: [duty_station]
+      description: "One crew pairing's availability as a server: off duty the pairing holds its own station; on duty the station is in the base pool serving legs; sickness pulls it back mid-block. The ops <-> HR bridge."
+      columns: [created_sim_time, active, deactivated_at, last_mutation_sim_time,
+                presentation_id, prop__base, prop__role, prop__owner,
+                prop__capacity, prop__allocated]
+      rename:
+        created_sim_time: created_at
+        last_mutation_sim_time: updated_at
+        presentation_id: station_code
+        prop__base: base
+        prop__role: role
+        prop__owner: pairing_id
+        prop__capacity: capacity
+        prop__allocated: allocated
+      descriptions:
+        record_index: "Unique numeric identifier for the station, assigned in creation order."
+        created_sim_time: "When the station was minted (at its pairing's induction, or at genesis)."
+        active: "TRUE while the station is live; FALSE once retired with its pairing's resignation."
+        deactivated_at: "When the station was retired; NULL while live."
+        last_mutation_sim_time: "When the station row was last updated."
+        presentation_id: "The station's code (DS-nnnn)."
+        prop__base: "Base the station belongs to: east or west."
+        prop__role: "Roster role of the pairing the station represents: lineholder or reserve."
+        prop__owner: "The crew pairing this station represents; joins crew_pairing.id."
+        prop__capacity: "Slots on this station (1; 0 once its pairing resigned and the station wound down)."
+        prop__allocated: "Slots currently held — by a leg flying the pairing, or by the pairing itself off duty."
+
+    - name: dispatch_pool
+      kind: queue
+      description: "A base pool's wait-queue configuration: which contention group it governs, its promotion discipline, and its full-pool policy."
+      columns: [created_sim_time, active, deactivated_at, last_mutation_sim_time,
+                prop__contention_group, prop__discipline, prop__on_full,
+                prop__base]
+      rename:
+        created_sim_time: created_at
+        last_mutation_sim_time: updated_at
+        prop__contention_group: pool_group
+        prop__discipline: discipline
+        prop__on_full: on_full
+        prop__base: base
+      descriptions:
+        record_index: "Unique numeric identifier for the pool, assigned in creation order."
+        created_sim_time: "When the pool was configured (at genesis)."
+        active: "TRUE while the pool is live."
+        deactivated_at: "When the pool was retired; NULL while live."
+        last_mutation_sim_time: "When the pool row was last updated."
+        prop__contention_group: "What the pool allocates: aircraft (tails) or duty_station (crew availability)."
+        prop__discipline: "Waiter promotion order: fifo for tails, preempt for duty stations (a sick pull displaces the holder)."
+        prop__on_full: "Policy when every server is full: waiters queue."
+        prop__base: "Base the pool serves: east or west."
+
+    - name: lifecycle
+      kind: journey_instance
+      description: "One process instance: a leg's flight lifecycle, or a pairing's roster, sickness, or employment lifecycle — its current state and when it began."
+      columns: [created_sim_time, active, deactivated_at, last_mutation_sim_time,
+                prop__actor, prop__journey_type, prop__current_state]
+      rename:
+        created_sim_time: created_at
+        last_mutation_sim_time: updated_at
+        prop__actor: subject_id
+        prop__journey_type: process
+        prop__current_state: current_state
+      descriptions:
+        record_index: "Unique numeric identifier for the lifecycle record, assigned in creation order."
+        created_sim_time: "When the lifecycle began."
+        active: "TRUE while the process is still running; FALSE once it reached a terminal state."
+        deactivated_at: "When the process finished; NULL while running."
+        last_mutation_sim_time: "When this row last changed — the most recent state transition."
+        prop__actor: "The leg or pairing walking this process; joins flight_leg.id or crew_pairing.id, depending on process."
+        prop__journey_type: "Which process this is: flight, roster, sickness, or employment."
+        prop__current_state: "The state the process is in right now."
+
+    - name: tail_hold
+      membership: {kind: resource, property: holders}
+      sub_types: [aircraft]
+      description: "One leg's hold on one tail, from the dispatch grant through the end of the turnaround (including any fault repair)."
+      columns: [joined_sim_time, left_sim_time, member__actor__id, elem__claim]
+      rename:
+        record_id: aircraft_id
+        member__actor__id: leg_id
+        joined_sim_time: held_from
+        left_sim_time: released_at
+        elem__claim: claim
+      descriptions:
+        record_id: "The tail being held; joins aircraft.id."
+        member__actor__id: "The leg holding the tail; joins flight_leg.id."
+        joined_sim_time: "When the tail was granted to the leg at dispatch."
+        left_sim_time: "When the tail was released after the turnaround; NULL if still held at quarter end."
+        elem__claim: "The seize that made this hold (flight:dispatching:tail_ready on every row here)."
+
+    - name: station_hold
+      membership: {kind: resource, property: holders}
+      sub_types: [duty_station]
+      description: "One hold on a crew pairing's duty station: a leg flying the pairing (claims flight:crewing:crew_aboard / flight:recover_crew:crew_recovered), or the pairing itself holding its own station off duty (roster:closing:closed) or after a sick pull (roster:pulled_back:pulled)."
+      columns: [joined_sim_time, left_sim_time, member__actor__id, elem__claim]
+      rename:
+        record_id: station_id
+        member__actor__id: holder_id
+        joined_sim_time: held_from
+        left_sim_time: released_at
+        elem__claim: claim
+      descriptions:
+        record_id: "The duty station being held; joins duty_station.id."
+        member__actor__id: "Who holds it: a leg (flight claims) or the station's own pairing (roster claims); joins flight_leg.id or crew_pairing.id by claim."
+        joined_sim_time: "When the hold was granted."
+        left_sim_time: "When the hold was released; NULL if still held at quarter end."
+        elem__claim: "The seize that made this hold — says whether a leg is flying the pairing or the pairing is holding its own station."
+
+    - name: pool_wait
+      membership: {kind: queue, property: waiters}
+      description: "One queue position in a base pool: a leg waiting for a tail or for crew, or a pairing waiting to reclaim its station at duty end. The emergent-delay record."
+      columns: [joined_sim_time, left_sim_time, member__actor__id,
+                elem__on_acquired_rule, elem__priority]
+      rename:
+        record_id: pool_id
+        member__actor__id: waiter_id
+        joined_sim_time: enqueued_at
+        left_sim_time: resolved_at
+        elem__on_acquired_rule: awaiting
+        elem__priority: priority
+      descriptions:
+        record_id: "The pool queued at; joins dispatch_pool.id."
+        member__actor__id: "The waiting leg or pairing; joins flight_leg.id or crew_pairing.id by the awaiting rule."
+        joined_sim_time: "When the waiter joined the queue."
+        left_sim_time: "When the wait resolved (grant, or abandoned at cancellation); NULL if still queued at quarter end."
+        elem__on_acquired_rule: "What the waiter was queued for: a tail (flight:dispatching:tail_ready), boarding crew (flight:crewing:crew_aboard), a reserve callout (flight:recover_crew:crew_recovered), or the pairing's own stand-down (roster:closing:closed)."
+        elem__priority: "Queue priority frozen at enqueue; meaningful on the preempt duty-station pools."
+
+    - name: crew_presence
+      membership: {kind: actor, property: presence}
+      description: "One claim on a crew pairing's presence: a duty day, a sickness episode (which outranks duty and stands the pairing down), or a muster report waiting for the duty grant."
+      columns: [joined_sim_time, left_sim_time, elem__claim, elem__status]
+      rename:
+        record_id: pairing_id
+        joined_sim_time: started_at
+        left_sim_time: ended_at
+        elem__claim: claim
+        elem__status: status
+      descriptions:
+        record_id: "The pairing whose presence is claimed; joins crew_pairing.id."
+        joined_sim_time: "When the claim began."
+        left_sim_time: "When the claim ended; NULL if still open at quarter end."
+        elem__claim: "What claimed the pairing: roster:on_duty:occupy (a duty day), sickness:sick:occupy (a sick episode), or roster:mustering:occupy (a muster report)."
+        elem__status: "occupying, or waiting (a muster report queued behind a sick episode)."
+
+    - name: role_binding
+      membership: {kind: journey_instance, property: bound_roles}
+      description: "One role bound to a process instance: the leg's planned destination (dest), its tail and crew seat, or the roster process's own-station bookkeeping roles."
+      columns: [joined_sim_time, left_sim_time, elem__role_name,
+                member__entity__kind, member__entity__id]
+      rename:
+        record_id: lifecycle_id
+        elem__role_name: role
+        member__entity__kind: participant_type
+        member__entity__id: participant_id
+        joined_sim_time: bound_from
+        left_sim_time: unbound_at
+      descriptions:
+        record_id: "The process instance the role is bound on; joins lifecycle.id."
+        elem__role_name: "The role filled: dest, tail, crew_seat, or the roster roles closed_sign / my_station / new_station."
+        member__entity__kind: "What kind of participant is bound: destination or asset."
+        member__entity__id: "The bound participant; joins destination.id, aircraft.id, or duty_station.id, depending on role."
+        joined_sim_time: "When the role was bound."
+        left_sim_time: "When the role was released; NULL where the binding ran to quarter end."
+
+  events:
+    name: audit_log
+    sources:
+      - kind: actor
+        sub_types: [crew]
+        item_type: crew_pairing
+        ignore: [actor_type, constitution]
+      - kind: journey_instance
+        item_type: lifecycle
+        ignore: [journey_type]
+        rename:
+          actor: subject_id
+      - kind: resource
+        sub_types: [aircraft]
+        item_type: aircraft
+        only: [capacity, allocated]
+      - kind: resource
+        sub_types: [duty_station]
+        item_type: duty_station
+        only: [capacity, allocated]
+
+# rebase:
+#   base_date: 2026-03-02
+#   timezone: UTC
