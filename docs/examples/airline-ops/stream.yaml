@@ -1,0 +1,61 @@
+# StreamConfig — airline-ops bundle, CDC replay
+# ============================================================
+# Drives `fabulexa-forge stream` (and the mixer) over the airline-ops emit at
+# docs/examples/airline-ops/bundle/. Three kinds -> three topics: the ops
+# lifecycle stream that carries the quarter's story, the crew HR stream, and
+# the tail-occupancy stream.
+#
+#   content: state-changes — `history` replayed as an ordered c/u/d CDC stream.
+#
+# VOCABULARY (parity with source.yaml): per-stream `kind_label` mirrors
+# source.yaml's table names (crew_pairing / lifecycle / aircraft), and `keys:`
+# mirrors its record_index elections — event keys are the same compact BIGINTs
+# each state table presents as `id`, and the lifecycle payload's `subject_id`
+# renders the leg's or pairing's index, source.yaml's own `prop__actor ->
+# subject_id` rename.
+#
+# Declared streams:
+#   crew_pairing — actor narrowed to its crew sub-type (the flight sub-type
+#                  carries no tracked property and its 5,759 creates belong
+#                  to the lifecycle stream's story, not HR's). Status changes
+#                  and sickness-episode increments over the flu wave.
+#   lifecycle    — journey_instance is not sub-typed (journey_type is not a
+#                  `<kind>_type` discriminator domain), so one stream carries
+#                  all four processes; `process` on every payload says which,
+#                  exactly like source.yaml's lifecycle table. current_state
+#                  c/u/d IS the operational feed: schedule entries, pushback
+#                  waits, cancellations, duty days, sick calls.
+#   aircraft     — the tail fleet's occupancy flips (allocated 0 <-> 1) and
+#                  the per-tail capacity record. duty_station occupancy is
+#                  left to the lifecycle stream's roster process rather than
+#                  doubled as a fourth topic.
+#
+# Anchor resolves from the sidecar runtime (start 2026-03-02, UTC); no rebase
+# needed. Bootstrap is supplied at the CLI (`--bootstrap-servers ...`) when
+# the sink is kafka.
+
+content: state-changes
+
+keys:
+  actor: record_index
+  journey_instance: record_index
+  resource: record_index
+
+streams:
+  - name: crew_pairing
+    kind: actor
+    sub_types: [crew]
+    properties: [status, sickness_episodes]
+    kind_label: crew_pairing
+  - name: lifecycle
+    kind: journey_instance
+    properties: [current_state, actor, journey_type]
+    rename:
+      actor: subject_id
+      journey_type: process
+    kind_label: lifecycle
+  - name: aircraft
+    kind: resource
+    sub_types: [aircraft]
+    properties: [allocated, capacity]
+    kind_label: aircraft
