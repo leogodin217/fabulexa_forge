@@ -8,17 +8,18 @@
 #   content: state-changes — `history` replayed as an ordered c/u/d CDC stream.
 #
 # VOCABULARY (parity with source.yaml): per-stream `kind_label` mirrors
-# source.yaml's table names (crew_pairing / lifecycle / aircraft), and `keys:`
+# source.yaml's table names (crew_member / lifecycle / aircraft), and `keys:`
 # mirrors its record_index elections — event keys are the same compact BIGINTs
 # each state table presents as `id`, and the lifecycle payload's `subject_id`
-# renders the leg's or pairing's index, source.yaml's own `prop__actor ->
+# renders the leg's or crew member's index, source.yaml's own `prop__actor ->
 # subject_id` rename.
 #
 # Declared streams:
-#   crew_pairing — actor narrowed to its crew sub-type (the flight sub-type
+#   crew_member  — actor narrowed to its crew sub-type (the flight sub-type
 #                  carries no tracked property and its 5,759 creates belong
 #                  to the lifecycle stream's story, not HR's). Status changes
-#                  and sickness-episode increments over the flu wave.
+#                  and sickness-episode increments over the flu wave, plus
+#                  the two mid-quarter hires' creates.
 #   lifecycle    — journey_instance is not sub-typed (journey_type is not a
 #                  `<kind>_type` discriminator domain), so one stream carries
 #                  all four processes; `process` on every payload says which,
@@ -42,11 +43,11 @@ keys:
   resource: record_index
 
 streams:
-  - name: crew_pairing
+  - name: crew_member
     kind: actor
     sub_types: [crew]
     properties: [status, sickness_episodes]
-    kind_label: crew_pairing
+    kind_label: crew_member
   - name: lifecycle
     kind: journey_instance
     properties: [current_state, actor, journey_type]
