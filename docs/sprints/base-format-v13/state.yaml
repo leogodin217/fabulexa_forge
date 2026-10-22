@@ -57,7 +57,7 @@ phases:
           - "tests/datasets/test_manifest.py"
           - "tests/test_cli_datasets.py"
   2:
-    status: pending
+    status: complete
     name: "C16 domain closure — check, impact oracle, ground truths"
     demo: "docs/sprints/base-format-v13/demos/phase_2_c16_domain_closure.py"
     steps:

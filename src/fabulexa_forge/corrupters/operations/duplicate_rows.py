@@ -23,6 +23,7 @@ from fabulexa_forge.corrupters.operations._impact import (
     actor_subtype_undeclared,
     branch_slice_at,
     draw_delta,
+    enum_value_undeclared,
     enumerate_row_units,
     history_series_exists,
     is_pinned_record_id,
@@ -161,8 +162,9 @@ def _conflict_duplicate_impact(
     (`resolve_c6_anchor` non-None) for that series and the mutation actually
     changed the stored value, unioned with C12 iff a mutated
     `prop__actor_type` rewrites the discriminator out of its declared
-    sub-types (`actor_subtype_undeclared`). beyond-c1-c12 iff that union is
-    empty.
+    sub-types (`actor_subtype_undeclared`), unioned with C16 iff a mutated
+    enum-domained `prop__` takes a value outside its declared options
+    (`enum_value_undeclared`). beyond-c1-c12 iff that union is empty.
     """
     codes: set["ImpactCode"] = set()
     if (
@@ -195,6 +197,8 @@ def _conflict_duplicate_impact(
             sidecar, table_spec.name, column, stored
         ):
             codes.add("C12")
+        if kind is not None and enum_value_undeclared(sidecar, kind, column, stored):
+            codes.add("C16")
     if not codes:
         return ("beyond-c1-c12",)
     return tuple(sorted(codes))

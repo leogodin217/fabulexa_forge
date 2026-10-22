@@ -535,6 +535,68 @@ def test_sentinel_actor_type_undeclared_and_tracked_declares_union() -> None:
     assert set(outcome.defects[0].impact) == {"C6", "C12"}
 
 
+_ACTOR_TYPE_DOMAIN = {"actor": {"actor_type": ("doctor", "nurse")}}
+
+
+def test_truncate_enum_domained_untracked_value_declares_c16() -> None:
+    state = _state(actor_rows=[_actor_row(record_id="a1", actor_type="doctor")])
+    outcome = _apply(
+        state,
+        "records__actor",
+        ["prop__actor_type"],
+        MutationTruncate(kind="truncate", max_length=3),
+        sidecar_obj=_sidecar(enum_domains=_ACTOR_TYPE_DOMAIN),
+    )
+    assert outcome.defects[0].impact == ("C16",)
+
+
+def test_truncate_enum_domained_tracked_value_declares_c6_and_c16() -> None:
+    state = _state(
+        actor_rows=[_actor_row(record_id="a1", actor_type="doctor")],
+        history_rows=[
+            _history_row(
+                kind="actor",
+                record_id="a1",
+                property_="actor_type",
+                sim_time=10,
+                value="doctor",
+            )
+        ],
+    )
+    outcome = _apply(
+        state,
+        "records__actor",
+        ["prop__actor_type"],
+        MutationTruncate(kind="truncate", max_length=3),
+        sidecar_obj=_sidecar(enum_domains=_ACTOR_TYPE_DOMAIN),
+    )
+    assert set(outcome.defects[0].impact) == {"C6", "C16"}
+
+
+def test_declared_value_on_enum_domained_prop_declares_no_c16() -> None:
+    state = _state(actor_rows=[_actor_row(record_id="a1", actor_type="doctor")])
+    outcome = _apply(
+        state,
+        "records__actor",
+        ["prop__actor_type"],
+        MutationSentinel(kind="sentinel", value="nurse"),
+        sidecar_obj=_sidecar(enum_domains=_ACTOR_TYPE_DOMAIN),
+    )
+    assert outcome.defects[0].impact == ("beyond-c1-c12",)
+
+
+def test_unregistered_column_declares_no_c16() -> None:
+    state = _state(patient_rows=[_patient_row(record_id="p1", name="Alice")])
+    outcome = _apply(
+        state,
+        "records__patient",
+        ["prop__name"],
+        MutationSentinel(kind="sentinel", value="ghost"),
+        sidecar_obj=_sidecar(enum_domains=_ACTOR_TYPE_DOMAIN),
+    )
+    assert outcome.defects[0].impact == ("beyond-c1-c12",)
+
+
 def test_record_roles_absent_means_no_c12() -> None:
     state = _state(actor_rows=[_actor_row(record_id="a1", actor_type="doctor")])
     mutation = MutationSentinel(kind="sentinel", value="ghost")
@@ -1070,7 +1132,7 @@ def test_out_of_domain_empty_value_is_no_mutation() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_out_of_domain_on_actor_type_declares_c12() -> None:
+def test_out_of_domain_on_actor_type_declares_c12_and_c16() -> None:
     state = _state(actor_rows=[_actor_row(record_id="a1", actor_type="doctor")])
     roles = RecordRoles(_registry={"actor": {"doctor": "dimension", "nurse": "fact"}})
     sidecar_obj = _sidecar(
@@ -1085,7 +1147,7 @@ def test_out_of_domain_on_actor_type_declares_c12() -> None:
         rng=_FixedSeed(0.0),
         sidecar_obj=sidecar_obj,
     )
-    assert outcome.defects[0].impact == ("C12",)
+    assert outcome.defects[0].impact == ("C12", "C16")
 
 
 def test_resample_drawing_back_a_prior_corruption_heals_to_beyond_c1_c12() -> None:

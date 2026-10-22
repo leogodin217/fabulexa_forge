@@ -1401,6 +1401,33 @@ def build_c12_subtype_domain_mismatch(dest: Path) -> None:
     write_emit(dest, tables=tables, branches=_SPANNING_BRANCHES, extra=extra)
 
 
+def build_c16_out_of_domain(dest: Path) -> None:
+    """Build the c16_out_of_domain fixture into dest.
+
+    The spanning fixture with one live records__actor prop__status value
+    ('archived') outside the declared enum_domains["actor"]["status"] options
+    (active / discharged / pending). The value is otherwise well-formed
+    (prop__status is slice_only, untracked, and carries no reference), so this
+    fails C16 alone.
+    """
+    dest.mkdir(parents=True, exist_ok=True)
+    db_path = dest / "run.duckdb"
+    conn = duckdb.connect(str(db_path))
+    history_rows, actor_rows, doctor_rows, membership_rows = _build_spanning_db(conn)
+    conn.execute(
+        "UPDATE records__actor SET prop__status = 'archived' WHERE record_id = 'a002'"
+    )
+    conn.close()
+
+    tables = _spanning_tables(history_rows, actor_rows, doctor_rows, membership_rows)
+    write_emit(
+        dest,
+        tables=tables,
+        branches=_SPANNING_BRANCHES,
+        extra=_base_extra(include_record_roles=True),
+    )
+
+
 # ---------------------------------------------------------------------------
 # C5 shape negatives — each isolates one clause of the amended
 # _check_c5_table positional check to records__actor alone.
@@ -1519,6 +1546,7 @@ _BUILDERS: dict[str, Callable[[Path], None]] = {
     "c12_missing_kind": build_c12_missing_kind,
     "c12_missing_subtype": build_c12_missing_subtype,
     "c12_subtype_domain_mismatch": build_c12_subtype_domain_mismatch,
+    "c16_out_of_domain": build_c16_out_of_domain,
     "c13_broken_pairing": build_c13_broken_pairing,
     "c13_out_of_enum_class": build_c13_out_of_enum_class,
     "c13_missing_genesis": build_c13_missing_genesis,

@@ -30,17 +30,20 @@ ImpactCode = Literal[
     "C11",
     "C12",
     "C13",
+    "C16",
     "beyond-c1-c12",
 ]
 """A semantic conformance check id, or the sentinel for defects outside those codes.
 
-Only the semantic checks a corrupter can break appear (C6, C7, C9-C13); a
+Only the semantic checks a corrupter can break appear (C6, C7, C9-C13, C16); a
 corrupter preserves structural conformance (C1-C5, C8) and the sidecar-only
 sub-type check (C14) by construction, so the vocabulary excludes them. C13's
 genesis clause is breakable -- `insert_rows` (a phantom carries no history),
 `schema_drift` (a renamed tracked column strands its history under the old
 property name), and `shift_sim_time` / `drop_events` (moving or dropping a
-series' genesis tick). The `beyond-c1-c12` sentinel keeps its historical spelling
+series' genesis tick). The cell-mutation operations can write a non-NULL value
+outside an enum-domained records string property's declared list (C16). The
+`beyond-c1-c12` sentinel keeps its historical spelling
 for defects that break none of these codes; it is mutually exclusive with the
 real codes -- normalize_impact rejects a mix."""
 

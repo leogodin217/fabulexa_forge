@@ -606,14 +606,15 @@ def test_mutate_cells_containment_holds(name: str, tmp_path: Path) -> None:
     assert failing <= impact_union
 
 
-def test_mutate_records_c6_exactly(tmp_path: Path) -> None:
-    """A records-surface mutate_cells C6 declaration: the manifest declares
-    exactly C6, and validate fails exactly C6."""
+def test_mutate_records_c6_c16_exactly(tmp_path: Path) -> None:
+    """A records-surface mutate_cells C6 declaration (its upper-cased status
+    value also leaves the status domain): the manifest declares exactly
+    C6 and C16, and validate fails exactly C6 and C16."""
     failing, impact_union = _run_and_agreement_sets(
         _config_mutate_records_c6(), tmp_path, build_fixture=build_history_series
     )
-    assert impact_union == {"C6"}
-    assert failing == {"C6"}
+    assert impact_union == {"C6", "C16"}
+    assert failing == {"C6", "C16"}
 
 
 def test_mutate_history_c6_exactly(tmp_path: Path) -> None:
@@ -626,14 +627,14 @@ def test_mutate_history_c6_exactly(tmp_path: Path) -> None:
     assert failing == {"C6"}
 
 
-def test_mutate_out_of_domain_c12_exactly(tmp_path: Path) -> None:
-    """The out_of_domain mutate_cells C12 declaration: the manifest declares
-    exactly C12, and validate fails exactly C12."""
+def test_mutate_out_of_domain_c12_c16_exactly(tmp_path: Path) -> None:
+    """The out_of_domain mutate_cells discriminator declaration: the manifest
+    declares exactly C12 and C16, and validate fails exactly C12 and C16."""
     failing, impact_union = _run_and_agreement_sets(
         _config_mutate_out_of_domain_c12(), tmp_path, build_fixture=build_history_series
     )
-    assert impact_union == {"C12"}
-    assert failing == {"C12"}
+    assert impact_union == {"C12", "C16"}
+    assert failing == {"C12", "C16"}
 
 
 def test_mutate_pure_beyond_c1_c12_validate_fully_passes(tmp_path: Path) -> None:

@@ -8,6 +8,7 @@ import pyarrow as pa
 import pytest
 
 from fabulexa_forge.corrupters.operations._impact import (
+    enum_value_undeclared,
     enumerate_series_units,
     membership_kind_id_pairs,
     resolve_c6_anchor,
@@ -16,7 +17,7 @@ from fabulexa_forge.corrupters.operations._impact import (
 from fabulexa_forge.corrupters.state import CorruptState, WorkingTable
 from fabulexa_forge.errors import CorruptError
 
-from .._helpers import column_spec, table_spec, working_table
+from .._helpers import column_spec, sidecar, table_spec, working_table
 
 _FORK_PATH = "trunk"
 _SLICE_AT = 100
@@ -622,3 +623,45 @@ class TestMembershipKindIdPairs:
             }
         )
         assert membership_kind_id_pairs(state) == frozenset()
+
+
+# ---------------------------------------------------------------------------
+# enum_value_undeclared
+# ---------------------------------------------------------------------------
+
+
+_STATUS_DOMAIN = {"actor": {"status": ("active", "retired")}}
+
+
+class TestEnumValueUndeclared:
+    def test_out_of_domain_string_on_registered_pair_is_true(self) -> None:
+        sc = sidecar((), enum_domains=_STATUS_DOMAIN)
+        assert enum_value_undeclared(sc, "actor", "prop__status", "zzz") is True
+
+    def test_declared_value_is_false(self) -> None:
+        sc = sidecar((), enum_domains=_STATUS_DOMAIN)
+        assert enum_value_undeclared(sc, "actor", "prop__status", "retired") is False
+
+    def test_unregistered_property_is_false(self) -> None:
+        sc = sidecar((), enum_domains=_STATUS_DOMAIN)
+        assert enum_value_undeclared(sc, "actor", "prop__name", "zzz") is False
+
+    def test_unregistered_kind_is_false(self) -> None:
+        sc = sidecar((), enum_domains=_STATUS_DOMAIN)
+        assert enum_value_undeclared(sc, "doctor", "prop__status", "zzz") is False
+
+    def test_non_prop_column_is_false(self) -> None:
+        sc = sidecar((), enum_domains=_STATUS_DOMAIN)
+        assert enum_value_undeclared(sc, "actor", "record_id", "zzz") is False
+
+    def test_absent_registry_is_false(self) -> None:
+        sc = sidecar(())
+        assert enum_value_undeclared(sc, "actor", "prop__status", "zzz") is False
+
+    def test_none_post_value_is_false(self) -> None:
+        sc = sidecar((), enum_domains=_STATUS_DOMAIN)
+        assert enum_value_undeclared(sc, "actor", "prop__status", None) is False
+
+    def test_non_string_post_value_is_false(self) -> None:
+        sc = sidecar((), enum_domains=_STATUS_DOMAIN)
+        assert enum_value_undeclared(sc, "actor", "prop__status", 7) is False
