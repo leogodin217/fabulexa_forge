@@ -159,7 +159,8 @@ class KeySpace:
 (clause f, key-space shape): `start` presence must match digit-rendered-ness
 exactly as `prefix`/`width` do, and must be a non-bool int ≥ 0. `gaps`, when
 present, requires a digit-rendered class and must be a mapping carrying exactly
-`rate` (a non-bool int/float number) and `max` (a non-bool int); absence parses
+`rate` (a non-bool int/float number) and `max` (a non-bool int); an int-valued
+`rate` is coerced via `float()` so `Gaps.rate` is always a float; absence parses
 to `gaps=None`. Any violation raises `PresentationKeysInvalidError` naming the
 context and the clause, matching the existing message convention.
 
@@ -478,6 +479,7 @@ union, so the check, the oracle, and the ground truths cannot land separately.
 | Modify | `src/fabulexa_forge/corrupters/operations/mutate_cells.py` |
 | Modify | `src/fabulexa_forge/corrupters/operations/duplicate_rows.py` |
 | Modify | `tests/recipes/_harness.py` |
+| Modify | `tests/corrupters/operations/test_impact.py` |
 | Modify | `tests/reader/_fixtures_build.py` |
 | Modify | `tests/reader/test_conformance_data.py` |
 | Modify | `tests/reader/test_conformance_structural.py` |
@@ -502,7 +504,8 @@ union, so the check, the oracle, and the ground truths cannot land separately.
   the table does not carry → that pair skipped
 - `validate` returns results in C1..C16 order (update the pinned-order test);
   the CLI `validate` output lists each of C1–C16 (update the pinned-output test)
-- `enum_value_undeclared`: out-of-domain string on a registered (kind, property)
+- `enum_value_undeclared` (in `tests/corrupters/operations/test_impact.py`, the
+  `_impact.py` predicate suite): out-of-domain string on a registered (kind, property)
   → True; declared value → False; unregistered property → False; absent
   registry → False; None / non-string post value → False
 - `mutate_cells` out-of-domain mutation of the discriminator → impact
@@ -565,5 +568,6 @@ union, so the check, the oracle, and the ground truths cannot land separately.
 | `tests/datasets/test_manifest.py`, `tests/test_cli_datasets.py` | Empty-catalog expectations |
 | `tests/reader/test_conformance_data.py`, `tests/reader/test_conformance_structural.py`, `tests/test_cli.py` | C16 coverage; C1..C16 order/output pins |
 | `tests/corrupters/operations/test_mutate_cells.py`, `tests/corrupters/operations/test_duplicate_rows.py`, `tests/corrupters/test_agreement.py` | C16 impact coverage |
+| `tests/corrupters/operations/test_impact.py` | `enum_value_undeclared` predicate coverage |
 | `examples/recipes/corrupt/mutate-out-of-domain/expect.yaml`, `examples/recipes/corrupt/mutate-string-dirt/expect.yaml` | Ground truths gain C16 (deliberate re-curation) |
 | `docs/sprints/base-format-v13/demos/phase_1_v13_reader.py`, `.../phase_2_c16_domain_closure.py` | Phase demos |
