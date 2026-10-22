@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import hashlib
 import io
+import json
 import tarfile
 from pathlib import Path
 from typing import BinaryIO
@@ -76,11 +77,14 @@ def test_datasets_list_json_empty_catalog(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     """`datasets list --format json` against the shipped (empty) catalog renders
-    exactly {"datasets":[]}."""
+    the empty datasets list plus the declared empty_reason, and nothing else."""
     exit_code = main(["datasets", "list", "--format", "json"])
     captured = capsys.readouterr()
     assert exit_code == 0
-    assert captured.out.strip() == '{"datasets":[]}'
+    document = json.loads(captured.out)
+    assert document["datasets"] == []
+    assert document["empty_reason"]
+    assert set(document) == {"datasets", "empty_reason"}
     assert captured.err == ""
 
 

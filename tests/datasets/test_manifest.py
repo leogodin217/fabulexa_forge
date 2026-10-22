@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 
 import pytest
+from pydantic import ValidationError
 
 from fabulexa_forge import SUPPORTED_BASE_FORMAT_VERSION
 from fabulexa_forge.datasets.manifest import load_manifest, render_dataset_listing
@@ -41,8 +42,36 @@ ENTRY_TWO = DatasetEntry.model_validate(
 
 def test_load_manifest_returns_empty_catalog() -> None:
     """load_manifest() returns the shipped catalog, offline: empty until packs are
-    rebuilt at the supported version."""
-    assert load_manifest().datasets == []
+    rebuilt at the supported version, with the emptiness declared."""
+    manifest = load_manifest()
+    assert manifest.datasets == []
+    assert manifest.empty_reason is not None
+
+
+def test_empty_reason_valid_on_empty_catalog() -> None:
+    """An empty catalog may declare empty_reason; the value is retained."""
+    manifest = DatasetManifest.model_validate(
+        {"datasets": [], "empty_reason": "packs pending rebuild"}
+    )
+    assert manifest.empty_reason == "packs pending rebuild"
+
+
+def test_empty_reason_rejected_on_populated_catalog() -> None:
+    """A populated catalog carrying empty_reason is a validation error."""
+    with pytest.raises(ValidationError, match="only valid when datasets is empty"):
+        DatasetManifest.model_validate(
+            {
+                "datasets": [ENTRY_ONE.model_dump()],
+                "empty_reason": "packs pending rebuild",
+            }
+        )
+
+
+def test_blank_or_multiline_empty_reason_rejected() -> None:
+    """A blank or multi-line empty_reason is a validation error."""
+    for reason in ("   ", "two\nlines"):
+        with pytest.raises(ValidationError, match="non-blank single line"):
+            DatasetManifest.model_validate({"datasets": [], "empty_reason": reason})
 
 
 def test_render_of_shipped_catalog_is_no_datasets_line() -> None:
@@ -63,9 +92,21 @@ def test_text_render_of_empty_manifest_is_no_datasets_line() -> None:
 
 
 def test_json_render_of_empty_manifest() -> None:
-    """JSON render of an empty manifest is exactly {"datasets":[]}."""
+    """JSON render of an empty, unreasoned manifest is exactly {"datasets":[]} —
+    the undeclared empty_reason is excluded, not rendered null."""
     manifest = DatasetManifest.model_validate({"datasets": []})
     assert render_dataset_listing(manifest, "json") == '{"datasets":[]}'
+
+
+def test_json_render_carries_declared_empty_reason() -> None:
+    """JSON render of an empty manifest with empty_reason carries it verbatim."""
+    manifest = DatasetManifest.model_validate(
+        {"datasets": [], "empty_reason": "packs pending rebuild"}
+    )
+    assert (
+        render_dataset_listing(manifest, "json")
+        == '{"datasets":[],"empty_reason":"packs pending rebuild"}'
+    )
 
 
 def test_text_render_lists_entries_in_authored_order() -> None:

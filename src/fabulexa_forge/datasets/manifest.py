@@ -51,10 +51,11 @@ def render_dataset_listing(manifest: DatasetManifest, fmt: str) -> str:
     Args:
         manifest: The loaded manifest.
         fmt: "text" for the human table, "json" for the byte-stable
-            document (the manifest's field set verbatim, raw values,
-            authored entry order, sorted keys, separators (",", ":")).
-            An empty manifest renders the no-datasets line under "text"
-            and the model document verbatim under "json".
+            document (the manifest's set fields verbatim — None fields
+            excluded — raw values, authored entry order, sorted keys,
+            separators (",", ":")). An empty manifest renders the
+            no-datasets line under "text" and the model document under
+            "json", carrying `empty_reason` only when it is declared.
 
     Returns:
         The complete stdout payload, without trailing newline.
@@ -70,9 +71,15 @@ def render_dataset_listing(manifest: DatasetManifest, fmt: str) -> str:
 
 
 def _render_json(manifest: DatasetManifest) -> str:
-    """Render the manifest as the byte-stable JSON listing document."""
+    """Render the manifest as the byte-stable JSON listing document.
+
+    None fields (an undeclared `empty_reason`) are excluded, so a populated
+    manifest's document is unchanged by the field's existence.
+    """
     return json.dumps(
-        manifest.model_dump(mode="json"), sort_keys=True, separators=(",", ":")
+        manifest.model_dump(mode="json", exclude_none=True),
+        sort_keys=True,
+        separators=(",", ":"),
     )
 
 

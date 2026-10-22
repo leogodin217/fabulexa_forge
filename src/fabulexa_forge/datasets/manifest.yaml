@@ -4,4 +4,7 @@
 # run `uv run python tools/build_dataset_pack.py <name> --out <dir>` and
 # paste the printed fragment — never hand-type them.
 # The catalog refills as packs are rebuilt against bundles at the supported version.
+# empty_reason is valid only while datasets is empty: delete it with the first
+# rebuilt entry.
 datasets: []
+empty_reason: "catalog intentionally empty: dataset packs are being rebuilt at base_format_version 13"
