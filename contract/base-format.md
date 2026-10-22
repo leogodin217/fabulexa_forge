@@ -4,7 +4,7 @@ The on-disk shape of one **base-layer emit** — a standalone, self-describing d
 
 **Purpose.** Define the contract precisely enough that any producer or consumer — in any language, in any repo — can implement this format without depending on any package other than DuckDB itself.
 
-**Status.** Reference producer is the Fabulexa publishing step. The conformance procedure (C1–C15) is verified by the producer's own conformance suite and by a standalone reference checker, `check_published_conformance.py`, shipped in the producer's repository (not alongside this document).
+**Status.** Reference producer is the Fabulexa publishing step. The conformance procedure (C1–C16) is verified by the producer's own conformance suite and by a standalone reference checker, `check_published_conformance.py`, shipped in the producer's repository (not alongside this document).
 
 **Audience.** Producers (today: the Fabulexa base writer; tomorrow: any base-layer producer, in any repo or language), consumers (future exporters, corrupters, analyst tooling, third-party tools).
 
@@ -25,7 +25,7 @@ The contract is **two artifacts per emit**, not a Python package:
 | `run.duckdb` | DuckDB's own format | DuckDB (any version supporting the schema written) |
 | `base.json` | `base-format.schema.json` (sibling of this doc) | Any reader of any kind |
 
-**`BASE_FORMAT_VERSION = 12`** — lives in the sidecar JSON, not in any Python package. No code imports needed to learn the version.
+**`BASE_FORMAT_VERSION = 13`** — lives in the sidecar JSON, not in any Python package. No code imports needed to learn the version.
 
 ---
 
@@ -123,7 +123,7 @@ Where P is the count of *scalar* declared properties for kind *K* and R is the c
 
 **`created_sim_time` is the record's immutable creation time.** Position 3 carries the `sim_time` at which the record was created and is set exactly once. It is unaffected by every later content event — a property write and a deactivation both leave it unchanged — and is non-NULL on every row, including write-once fact records (`history_tracked: false`). Consumers MAY use it to bound a record's lifetime from below.
 
-**`last_mutation_sim_time` bounds every content change to its record.** Position 6 advances on *every* content event for the record — creation, each property write, and deactivation. A deactivation flip is a content change, **not** exempt: a record whose only post-creation event is deactivation carries `last_mutation_sim_time == deactivated_at`. Producers MUST uphold this so consumers MAY treat the column as a high-water mark over the record's whole lifecycle, deactivation included. This is binding at `base_format_version: 12`.
+**`last_mutation_sim_time` bounds every content change to its record.** Position 6 advances on *every* content event for the record — creation, each property write, and deactivation. A deactivation flip is a content change, **not** exempt: a record whose only post-creation event is deactivation carries `last_mutation_sim_time == deactivated_at`. Producers MUST uphold this so consumers MAY treat the column as a high-water mark over the record's whole lifecycle, deactivation included. This is binding at `base_format_version: 13`.
 
 **Row order.** Creation order within kind, lexicographic on kind across kinds — the order in which the producer created each record, preserved by insertion-order iteration. A kind whose records are created through more than one id-minting path (e.g. sequential integer-string ids and hex-digest ids on the same kind) yields rows interleaved by creation time, **not** sorted by `record_id` value. Consumers MUST NOT rely on any sort derived from `record_id` — ids minted by different paths are structurally disjoint, and lexicographic order over the mixed set carries no semantic meaning.
 
@@ -344,7 +344,7 @@ The sidecar's JSON Schema is `base-format.schema.json`, beside this doc. Conform
 
 ```json
 {
-  "base_format_version": 12,
+  "base_format_version": 13,
   "surface": "published",
   "scenario_description": "A regional hospital network's inpatient/outpatient flow.",
   "scenario_name": "Regional Hospital Network",
@@ -384,7 +384,7 @@ The sidecar's JSON Schema is `base-format.schema.json`, beside this doc. Conform
 
 | Field | Type | Required | Meaning |
 |---|---|---|---|
-| `base_format_version` | integer | yes | Format version. Current value: `12`. |
+| `base_format_version` | integer | yes | Format version. Current value: `13`. |
 | `surface` | string | yes | Positive discriminator naming what this emit is. Always `"published"` in an emit conformant with this document. See § The `surface` field. |
 | `scenario_description` | string | optional | The scenario's declared narrative, forwarded verbatim from the source emit. Present only when the source scenario declared one; omitted entirely otherwise. See § Scenario narrative. |
 | `scenario_name` | string | optional | The scenario's declared display label, forwarded verbatim from the source emit. Present only when the source scenario declared one; omitted entirely otherwise. See § Scenario narrative. |
@@ -422,7 +422,7 @@ The sidecar's JSON Schema is `base-format.schema.json`, beside this doc. Conform
 | `row_census` | object | optional | Row counts describing the rows of the file this sidecar sits in, keyed by `fork_path` — one key, matching the single `branches[]` entry. Keys sorted lexicographically at every nesting level. Advisory: no conformance check ranges over its contents. See § The `row_census` block. |
 | `tables[].rows` | integer | yes | Row count of the table. |
 
-The fields above are the *required* shape at `base_format_version: 12`. Producers MAY add other top-level fields (cross-emit linkage, pin-identity surfaces, producer hints) as optional extensions; a reader encountering unknown fields under a `base_format_version: 12` sidecar MAY warn but MUST NOT fail. See § Format versioning for which additions are version-compatible vs. require a bumped version.
+The fields above are the *required* shape at `base_format_version: 13`. Producers MAY add other top-level fields (cross-emit linkage, pin-identity surfaces, producer hints) as optional extensions; a reader encountering unknown fields under a `base_format_version: 13` sidecar MAY warn but MUST NOT fail. See § Format versioning for which additions are version-compatible vs. require a bumped version.
 
 ### The `surface` field
 
@@ -580,7 +580,7 @@ actor sub-types, never narrowed to those surviving a slice — this is what keep
 the block slice-stable.
 
 Adding `record_roles` is a version-compatible extension at
-`base_format_version: 12`: it is an optional top-level field a reader that does
+`base_format_version: 13`: it is an optional top-level field a reader that does
 not recognize it ignores (unknown top-level fields MAY warn but MUST NOT fail).
 A generic exporter branches on `record_roles` with no hard-coded kind→role map.
 
@@ -692,7 +692,7 @@ exactly this one column. C14 references this carve-out.
 The declared partition and the kind's structural properties are both fixed at
 run initialization and persisted with the run, so every emit derived from the
 same persisted run carries the same per-kind entry across `slice_at` choices. Adding `sub_type_columns` is a version-compatible
-extension at `base_format_version: 12`: an optional top-level field a reader
+extension at `base_format_version: 13`: an optional top-level field a reader
 that does not recognize it ignores (unknown top-level fields MAY warn but MUST
 NOT fail). Consumers gate on presence and fall back to union-schema behavior
 when absent.
@@ -754,7 +754,7 @@ semantics) — its identity-column analogue is the key declaration
 `tracked` — it is re-minted at each change instant of its source, and those mints
 are appended to the `history` table.
 
-**Coverage.** A `base_format_version: 12` emit carries both attributes on every
+**Coverage.** A `base_format_version: 13` emit carries both attributes on every
 records-category `prop__<name>` column, and on every presentation-property column.
 
 **All-or-none across an emit's `prop__` columns.** A producer that emits column
@@ -768,7 +768,7 @@ emit derived from the same persisted run carries the same pair for a given colum
 across `slice_at` choices — matching how `enum_domains` and `pinned_ids` are
 run-level.
 
-**Reader contract.** A reader gating on `base_format_version: 12` reads
+**Reader contract.** A reader gating on `base_format_version: 13` reads
 `temporal_class` directly. On a v4 emit the attribute is **absent and the class is
 unknown**; the reader falls back to `history_tracked` inference and inherits its
 false-negative tail — and cannot distinguish `constant` from `slice_only` at all,
@@ -921,7 +921,7 @@ non-NULL per the claim above):
 | `unique_within` | `"branch"` | Values distinct among rows sharing a `fork_path`; `(fork_path, presentation_id)` keys the partition. |
 | `branch_stable` | `true` | The same record carries the same value on every branch where it appears — the cross-branch counterfactual join key. |
 | `slice_stable` | `true` | Across emits produced from the same producing run and the same producer configuration, a record keeps its value regardless of slice or branch selection — incremental re-export cannot renumber. |
-| `key_space` | object | The declaration's key-space identity, input to the union-safety algebra below. `class` is `"counter"` (per-declaration counter over the emitted row set), `"record_index"` (pure function of the kind's dense per-branch record index), `"uuid"` (per-record draw), or `"record_id"` (record id verbatim). Digit-rendered classes (`counter` / `record_index`) carry `prefix` and `width`; unprefixed strategies carry `prefix: ""`, `width: 0`. |
+| `key_space` | object | The declaration's key-space identity, input to the union-safety algebra below. `class` is `"counter"` (per-declaration counter over the emitted row set), `"record_index"` (pure function of the kind's dense per-branch record index), `"uuid"` (per-record draw), or `"record_id"` (record id verbatim). Digit-rendered classes (`counter` / `record_index`) carry the rendering parameters `prefix`, `width`, and `start` (the declared base of the minted series; `1` when the declaration declared none), plus `gaps` (`{"rate": <float>, "max": <int>}`, the declared seeded-gap policy) iff declared. Unprefixed strategies carry `prefix: ""`, `width: 0`; the always-written `start` follows the same uniform-participation convention. Texture-parameter comparison in the algebra below is exact equality: the parameters are declarations from one producer configuration, not measurements, so no tolerance applies. |
 
 `unique_within` and the stability pair are fully determined by
 `key_space.class` (`counter` → `"emit"`/`false`/`false`; every other class →
@@ -937,11 +937,12 @@ overlap), so the block makes no cross-kind claim.
 
 | Pair | Union-safe | Why |
 |---|---|---|
-| `record_index` × `record_index`, identical `prefix` and `width` | ✓ | One shared injective space — sub-types draw disjoint values from the kind's single dense per-branch index |
+| `record_index` × `record_index`, identical `prefix`, `width`, `start`, and `gaps` | ✓ | Identical rendering parameters evaluate **one shared texture function** — the `record_index`-class texture is kind-scoped, a producer guarantee this row states normatively — injective over the kind's single dense per-branch index, from which sub-types draw disjoint inputs |
+| `record_index` × `record_index`, identical `prefix` and `width`, differing `start` or `gaps` | ✗ | The sub-types' inputs stay disjoint, but two different strictly-increasing functions can map distinct inputs to one value (a differing `start` alone shifts one output range onto the other), rendering equal strings |
 | `uuid` × `uuid` | ✓ | Independent per-record draws keyed on distinct record ids |
 | `record_id` × `record_id` | ✓ | The record id is unique across the kind's records |
 | Digit-rendered × digit-rendered (any `counter` / `record_index` mix) with **incomparable prefixes** | ✓ | Rendered strings can never be equal (see rule below); width overflow included |
-| Digit-rendered × digit-rendered with comparable prefixes (incl. equal prefixes, except the identical-`record_index` row above) | ✗ | `A-` / `A-1` collide via overflow; two counters with equal prefixes always collide |
+| Digit-rendered × digit-rendered with comparable prefixes (incl. equal prefixes, except the identical-parameters `record_index` row above) | ✗ | `A-` / `A-1` collide via overflow; two counters with equal prefixes always collide. Texture never rescues a comparable pair, exactly as width never does |
 | `uuid` × any digit-rendered or `record_id` space | ✗ | Conservative — no proof the rendered forms are disjoint |
 | `record_id` × any digit-rendered space | ✗ | Record-id strings are opaque — may collide with rendered digits |
 
@@ -955,7 +956,10 @@ longer prefix to extend the shorter by digits. `WARD_` / `THTR_`
 incomparable (safe); `A-` / `A-1` comparable (unsafe); `""` / `X_`
 incomparable (safe); `""` / `"1"` comparable (unsafe). `width` never rescues
 comparability: padding produces leading zeros and overflow removes any
-length bound, so only the prefix relation matters.
+length bound, so only the prefix relation matters. `start` and `gaps` never
+rescue it either: texture shifts and perforates the digit series without
+bounding its length, so a comparable pair stays unsafe whatever the texture
+parameters.
 
 **Combined-set properties.** For any pairwise union-safe set of one kind's
 entries, the union of their cells satisfies:
@@ -1334,7 +1338,23 @@ a published emit — no `firings` table, no `machinery_kinds`, no provenance
 column group — are C3, C12, and C5 respectively; C15 checks only what those
 do not: the `surface` discriminator itself.
 
-A reference Python conformance check, `check_published_conformance.py`, ships in the producer's repository and implements C1–C15 against any `(emit_dir,)` argument. It checks exactly the format described by this document. Implementations in other languages that pass C1–C15 are equally conformant.
+### C16. Domain closure
+
+```
+if enum_domains absent: skip
+for each (kind, property) in enum_domains with a records__<kind> table
+    carrying prop__<property>:
+    require: every non-NULL value in records__<kind>.prop__<property>
+             is one of the entry's declared "value"s
+```
+
+The inverse of the registry's intent-not-observation stance: a declared
+option with no live row is conformant; a live value outside the declared
+list is the violation. A registry kind with no records table in the emit is
+skipped (the registry is run-wide; an emit's table set may be narrower), as
+is a registry property whose column the table does not carry.
+
+A reference Python conformance check, `check_published_conformance.py`, ships in the producer's repository and implements C1–C16 against any `(emit_dir,)` argument. It checks exactly the format described by this document. Implementations in other languages that pass C1–C16 are equally conformant.
 
 ---
 
@@ -1344,7 +1364,7 @@ A reference Python conformance check, `check_published_conformance.py`, ships in
 |---|---|---|
 | `base_format_version` | `base.json` | Required tables change, fixed-table column lists change, sidecar schema changes |
 
-**Current version = 12.** This document defines v12. A version bump implies one of:
+**Current version = 13.** This document defines v13. A version bump implies one of:
 - The required-tables set changed (added/removed/renamed tables)
 - A fixed-table required-column list changed
 - The sidecar schema gained a new *required* top-level field
@@ -1399,6 +1419,18 @@ fields (`claim`, `granted_at`) interleaved between the existing fields —
 `elem__granted_at` (BIGINT) columns and the surrounding `elem__<name>` columns
 shift position, a positional-shape change a v9 reader keying on the prior
 column order cannot interpret correctly.
+
+The `12 → 13` bump is forced by a semantics change to an existing normative
+rule: sequence-shaped minting declarations carry optional `start` / `gaps`
+texture, and the union-safety algebra's `record_index` × `record_index` row
+conditions on all four rendering parameters (`prefix`, `width`, `start`,
+`gaps`) instead of `prefix` and `width` alone. A v12 reader applying the
+prior identical-`prefix`-and-`width` rule to entries with differing texture
+would wrongly conclude union safety — an incompatible reading, which is
+what a bump is for. The `key_space` texture fields themselves (`start`
+always written for digit-rendered classes, `gaps` iff declared) ride the
+bump as schema additions; table row content is otherwise unchanged in
+shape.
 
 A reader MUST gate on `base_format_version` and refuse to interpret an unknown version. No auto-upgrade.
 

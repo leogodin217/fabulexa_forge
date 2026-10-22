@@ -3,10 +3,11 @@ defect_counts:
 
 impact_union:
   - C12
+  - C16
 
 contains_defects:
   - class: out_of_domain_value
     rule: actor_type_out_of_domain
-    impact: [C12]
+    impact: [C12, C16]
     location.table: records__actor
     location.column: prop__actor_type

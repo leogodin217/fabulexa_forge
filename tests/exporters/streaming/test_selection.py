@@ -18,7 +18,13 @@ from typing import Any
 import duckdb
 import pytest
 from _support.notices import RecordingNoticeSink, discard_notice_sink
-from _support.sidecar_builder import enum_options, identity_column, prop_column
+from _support.sidecar_builder import (
+    enum_options,
+    identity_column,
+    key_space,
+    partition_key,
+    prop_column,
+)
 from _support.sidecar_builder import write_emit as _write_sidecar
 
 from fabulexa_forge.config.models import KindStream, MembershipStream, StreamConfig
@@ -228,12 +234,7 @@ _ENUM_DOMAINS: dict[str, object] = {
 _GIZMO_MIXED_REGISTRY: dict[str, object] = {
     "gizmo": {
         "sub_types": {
-            "red": {
-                "unique_within": "emit",
-                "branch_stable": False,
-                "slice_stable": False,
-                "key_space": {"class": "counter", "prefix": "R_", "width": 3},
-            }
+            "red": partition_key(key_space("counter", prefix="R_", width=3, start=1))
         },
         # A single declared sub_type's rollup equals that sub_type's own
         # claim (no union ambiguity with one member) — the two-subtype

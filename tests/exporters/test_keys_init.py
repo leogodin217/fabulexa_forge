@@ -30,6 +30,8 @@ from _support.notices import discard_notice_sink
 from _support.sidecar_builder import (
     enum_options,
     identity_column,
+    key_space,
+    partition_key,
     prop_column,
     write_emit,
 )
@@ -108,12 +110,7 @@ def _sidecar(
 
 def _raw_counter_key(prefix: str, width: int = 3) -> dict[str, object]:
     """A conformant counter-class raw partition_key (emit/false/false)."""
-    return {
-        "unique_within": "emit",
-        "branch_stable": False,
-        "slice_stable": False,
-        "key_space": {"class": "counter", "prefix": prefix, "width": width},
-    }
+    return partition_key(key_space("counter", prefix=prefix, width=width, start=1))
 
 
 #: `entity`'s driver/bus declared with bare (comparable) counter prefixes --
@@ -143,12 +140,7 @@ _PARTIAL_PRESENTATION_KEYS: dict[str, object] = {
 
 _FLAT_PRESENTATION_KEYS: dict[str, object] = {
     "booking": {
-        "key": {
-            "unique_within": "branch",
-            "branch_stable": True,
-            "slice_stable": True,
-            "key_space": {"class": "record_index", "prefix": "", "width": 4},
-        }
+        "key": partition_key(key_space("record_index", prefix="", width=4, start=1))
     }
 }
 
@@ -259,16 +251,9 @@ def test_incoherent_registry_block_propagates_unconditionally() -> None:
     """An incoherent `presentation_keys` block raises `PresentationKeysInvalidError`
     even though nothing in the proposal would elect `presentation_id`
     -- `propose_key_election` always consults the registry."""
-    incoherent: dict[str, object] = {
-        "booking": {
-            "key": {
-                "unique_within": "branch",
-                "branch_stable": True,
-                "slice_stable": True,
-                "key_space": {"class": "counter", "prefix": "X_", "width": 3},
-            }
-        }
-    }
+    incoherent_key = partition_key(key_space("counter", prefix="X_", width=3, start=1))
+    incoherent_key.update(unique_within="branch", branch_stable=True, slice_stable=True)
+    incoherent: dict[str, object] = {"booking": {"key": incoherent_key}}
     sidecar = _sidecar([_records_table("booking")], presentation_keys=incoherent)
     with pytest.raises(PresentationKeysInvalidError):
         propose_key_election(sidecar)
@@ -388,12 +373,9 @@ def test_render_preserves_active_declaration_order() -> None:
 _PARTIAL_PRESENTATION_KEYS_FOR_ACTOR: dict[str, object] = {
     "actor": {
         "sub_types": {
-            "driver": {
-                "unique_within": "branch",
-                "branch_stable": True,
-                "slice_stable": True,
-                "key_space": {"class": "record_index", "prefix": "DRV_", "width": 4},
-            }
+            "driver": partition_key(
+                key_space("record_index", prefix="DRV_", width=4, start=1)
+            )
         },
         "unique_within": "branch",
         "branch_stable": True,

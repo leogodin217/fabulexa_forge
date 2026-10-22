@@ -22,6 +22,7 @@ from fabulexa_forge.corrupters.operations._impact import (
     branch_slice_at,
     cell_locator,
     current_value,
+    enum_value_undeclared,
     enumerate_cell_units,
     placement_populations,
     property_name_for_prop_column,
@@ -197,7 +198,8 @@ def _cell_impact(
     `history.value`; see `_history_value_impact`.
 
     records `prop__<p>`: `C6` iff the series' post-operation round-trip
-    fails; `C12` iff `actor_subtype_undeclared`; union when both hold.
+    fails; `C12` iff `actor_subtype_undeclared`; `C16` iff
+    `enum_value_undeclared`; the union of whichever hold.
     `presentation_id` / `elem__*`: never.
     """
     if not column.startswith("prop__"):
@@ -218,6 +220,8 @@ def _cell_impact(
         sidecar, table_name, column, post_value
     ):
         codes.append("C12")
+    if enum_value_undeclared(sidecar, kind, column, post_value):
+        codes.append("C16")
     return tuple(codes) if codes else ("beyond-c1-c12",)
 
 

@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://fabulexa.example/schemas/base-format-v12.schema.json",
+  "$id": "https://fabulexa.example/schemas/base-format-v13.schema.json",
   "title": "Base Format Sidecar (base.json)",
   "description": "Sidecar manifest enumerating the branches and tables present in a base-layer emit's run.duckdb. Defined by base-format.md, beside this schema.",
   "type": "object",
@@ -9,8 +9,8 @@
   "properties": {
     "base_format_version": {
       "type": "integer",
-      "description": "Format version. v12 = 12. Reader gates on this; unknown versions must be rejected.",
-      "const": 12
+      "description": "Format version. v13 = 13. Reader gates on this; unknown versions must be rejected.",
+      "const": 13
     },
     "surface": {
       "type": "string",
@@ -301,7 +301,7 @@
         },
         "history_tracked": {
           "type": "boolean",
-          "description": "SCD class for records-category prop__<name> columns. true = type-2 (priors recoverable from the history table); false = type-1 (current value only). Present on every records-category prop__<name> column of a base_format_version: 12 emit, and on presentation-property columns. Omitted on structural, provenance, fixed-table, membership, and presentation_id columns."
+          "description": "SCD class for records-category prop__<name> columns. true = type-2 (priors recoverable from the history table); false = type-1 (current value only). Present on every records-category prop__<name> column of a base_format_version: 13 emit, and on presentation-property columns. Omitted on structural, provenance, fixed-table, membership, and presentation_id columns."
         },
         "temporal_class": {
           "type": "string",
@@ -372,6 +372,27 @@
           "type": "integer",
           "minimum": 0,
           "description": "Zero-pad width for digit-rendered classes; 0 for the unprefixed (sequential / global) forms. Present iff class is digit-rendered."
+        },
+        "start": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Base of the minted series for digit-rendered classes: the declared start, or 1 when the declaration declared none. Present iff class is digit-rendered."
+        },
+        "gaps": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["rate", "max"],
+          "properties": {
+            "rate": {
+              "type": "number",
+              "description": "Per-step probability that a gap precedes the next value."
+            },
+            "max": {
+              "type": "integer",
+              "description": "Largest gap size; each gap is drawn uniformly from 1 to max."
+            }
+          },
+          "description": "Declared gap policy of the minting declaration. Present iff the declaration declared gaps; digit-rendered classes only."
         }
       },
       "allOf": [
@@ -380,10 +401,17 @@
             "properties": {"class": {"enum": ["counter", "record_index"]}}
           },
           "then": {
-            "required": ["prefix", "width"]
+            "required": ["prefix", "width", "start"]
           },
           "else": {
-            "not": {"required": ["prefix", "width"]}
+            "not": {
+              "anyOf": [
+                {"required": ["prefix"]},
+                {"required": ["width"]},
+                {"required": ["start"]},
+                {"required": ["gaps"]}
+              ]
+            }
           }
         }
       ]

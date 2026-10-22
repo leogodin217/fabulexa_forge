@@ -17,7 +17,12 @@ from zoneinfo import ZoneInfo
 import duckdb
 import pytest
 from _support.notices import discard_notice_sink
-from _support.sidecar_builder import enum_options, identity_column
+from _support.sidecar_builder import (
+    enum_options,
+    identity_column,
+    key_space,
+    partition_key,
+)
 from _support.sidecar_builder import write_emit as _write_sidecar
 
 from fabulexa_forge.anchor import EffectiveAnchor
@@ -107,14 +112,7 @@ _HISTORY_COLS: list[dict[str, object]] = [
 #: registry `resolve_identity_projection`'s widened presentation_id gate
 #: consults when a stream publishes presentation_id.
 _ITEM_PRESENTATION_KEYS: dict[str, object] = {
-    "item": {
-        "key": {
-            "unique_within": "emit",
-            "branch_stable": False,
-            "slice_stable": False,
-            "key_space": {"class": "counter", "prefix": "I_", "width": 3},
-        }
-    }
+    "item": {"key": partition_key(key_space("counter", prefix="I_", width=3, start=1))}
 }
 
 #: The default identity projection every non-election-focused resolver call

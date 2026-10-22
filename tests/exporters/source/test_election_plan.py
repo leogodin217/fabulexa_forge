@@ -30,6 +30,8 @@ from _support.notices import discard_notice_sink
 from _support.sidecar_builder import (
     enum_options,
     identity_column,
+    key_space,
+    partition_key,
     prop_column,
     write_emit,
 )
@@ -227,12 +229,7 @@ def _watchers_membership_table(owner_kind: str) -> "dict[str, object]":
 
 def _device_partition(prefix: str) -> "dict[str, object]":
     """A conformant counter-class raw partition_key entry."""
-    return {
-        "unique_within": "emit",
-        "branch_stable": False,
-        "slice_stable": False,
-        "key_space": {"class": "counter", "prefix": prefix, "width": 3},
-    }
+    return partition_key(key_space("counter", prefix=prefix, width=3, start=1))
 
 
 _DEVICE_SAFE_KEYS: "dict[str, object]" = {

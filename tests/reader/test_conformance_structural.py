@@ -924,8 +924,8 @@ class TestValidate:
             report = validate(emit)
         assert isinstance(report, ConformanceReport)
 
-    def test_results_in_c1_to_c15_order(self, base_fixtures: dict[str, Path]) -> None:
-        """validate returns results in C1..C15 order."""
+    def test_results_in_c1_to_c16_order(self, base_fixtures: dict[str, Path]) -> None:
+        """validate returns results in C1..C16 order."""
         with open_emit(base_fixtures["spanning"]) as emit:
             report = validate(emit)
         check_ids = [r.check for r in report.results]
@@ -945,6 +945,7 @@ class TestValidate:
             "C13",
             "C14",
             "C15",
+            "C16",
         ]
 
     def test_c4_wrong_history_type_fails_c4_not_c2(

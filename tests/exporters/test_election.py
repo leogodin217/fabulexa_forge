@@ -12,7 +12,13 @@ from pathlib import Path
 
 import duckdb
 import pytest
-from _support.sidecar_builder import enum_options, identity_column, write_emit
+from _support.sidecar_builder import (
+    enum_options,
+    identity_column,
+    key_space,
+    partition_key,
+    write_emit,
+)
 
 from fabulexa_forge import SUPPORTED_BASE_FORMAT_VERSION
 from fabulexa_forge.errors import (
@@ -96,12 +102,7 @@ def _sidecar(
 
 def _raw_counter_key(prefix: str, width: int = 3) -> dict[str, object]:
     """A conformant counter-class raw partition_key (emit/false/false)."""
-    return {
-        "unique_within": "emit",
-        "branch_stable": False,
-        "slice_stable": False,
-        "key_space": {"class": "counter", "prefix": prefix, "width": width},
-    }
+    return partition_key(key_space("counter", prefix=prefix, width=width, start=1))
 
 
 _ENTITY_DOMAIN: dict[str, object] = {
@@ -260,7 +261,7 @@ class TestResolutionGates:
                     "unique_within": "branch",
                     "branch_stable": True,
                     "slice_stable": True,
-                    "key_space": {"class": "counter", "prefix": "X_", "width": 3},
+                    "key_space": key_space("counter", prefix="X_", width=3, start=1),
                 }
             }
         }
@@ -277,7 +278,7 @@ class TestResolutionGates:
                     "unique_within": "branch",
                     "branch_stable": True,
                     "slice_stable": True,
-                    "key_space": {"class": "counter", "prefix": "X_", "width": 3},
+                    "key_space": key_space("counter", prefix="X_", width=3, start=1),
                 }
             }
         }
@@ -286,33 +287,100 @@ class TestResolutionGates:
             resolve_election(sidecar, {"booking": "presentation_id"})
 
 
+_RECORD_ID_SPACE = KeySpace(
+    space_class="record_id", prefix=None, width=None, start=None, gaps=None
+)
+_RECORD_INDEX_SPACE = KeySpace(
+    space_class="record_index", prefix="", width=0, start=0, gaps=None
+)
+
+
+def _record_index_presentation_keys(start: int) -> dict[str, object]:
+    """entity.alpha / entity.beta both registry `record_index` at the bare
+    prefix, with the given declared series `start`."""
+    return {
+        "entity": {
+            "sub_types": {
+                sub_type: partition_key(
+                    key_space("record_index", prefix="", width=0, start=start)
+                )
+                for sub_type in ("alpha", "beta")
+            },
+            "unique_within": "branch",
+            "branch_stable": True,
+            "slice_stable": True,
+        }
+    }
+
+
 class TestSynthesizedKeySpaces:
     def test_record_id_class(self) -> None:
         election = resolve_election(_entity_sidecar(), None)
         pop = election.populations_for("booking")[0]
-        assert pop.key_space == KeySpace(
-            space_class="record_id", prefix=None, width=None
-        )
+        assert pop.key_space == _RECORD_ID_SPACE
 
-    def test_record_index_class_empty_prefix_zero_width(self) -> None:
+    def test_record_index_class_carries_raw_dense_index_texture(self) -> None:
         election = resolve_election(_entity_sidecar(), {"booking": "record_index"})
         pop = election.populations_for("booking")[0]
-        assert pop.key_space == KeySpace(space_class="record_index", prefix="", width=0)
+        assert pop.key_space == KeySpace(
+            space_class="record_index", prefix="", width=0, start=0, gaps=None
+        )
 
     def test_record_id_unsafe_beside_record_index(self) -> None:
-        record_id_space = KeySpace(space_class="record_id", prefix=None, width=None)
-        record_index_space = KeySpace(space_class="record_index", prefix="", width=0)
-        assert union_safe(record_id_space, record_index_space) is False
+        assert union_safe(_RECORD_ID_SPACE, _RECORD_INDEX_SPACE) is False
 
     def test_record_id_unsafe_beside_uuid(self) -> None:
-        record_id_space = KeySpace(space_class="record_id", prefix=None, width=None)
-        uuid_space = KeySpace(space_class="uuid", prefix=None, width=None)
-        assert union_safe(record_id_space, uuid_space) is False
+        uuid_space = KeySpace(
+            space_class="uuid", prefix=None, width=None, start=None, gaps=None
+        )
+        assert union_safe(_RECORD_ID_SPACE, uuid_space) is False
 
     def test_empty_prefix_incomparable_with_alpha_prefix(self) -> None:
-        record_index_space = KeySpace(space_class="record_index", prefix="", width=0)
-        alpha_space = KeySpace(space_class="counter", prefix="ALPHA_", width=3)
-        assert union_safe(record_index_space, alpha_space) is True
+        alpha_space = KeySpace(
+            space_class="counter", prefix="ALPHA_", width=3, start=1, gaps=None
+        )
+        assert union_safe(_RECORD_INDEX_SPACE, alpha_space) is True
+
+    def test_built_in_record_index_safe_beside_built_in(self) -> None:
+        election = resolve_election(
+            _entity_sidecar(),
+            {"entity": {"alpha": "record_index", "beta": "record_index"}},
+        )
+        alpha_pop, beta_pop = election.populations_for("entity")[:2]
+        assert union_safe(alpha_pop.key_space, beta_pop.key_space) is True
+
+    def test_built_in_record_index_unsafe_beside_start_one_declaration(self) -> None:
+        """Design decision 1's consequence, asserted directly: raw index 1 and a
+        start-1 rendering of index 0 both read "1"."""
+        declared = KeySpace(
+            space_class="record_index", prefix="", width=0, start=1, gaps=None
+        )
+        assert union_safe(_RECORD_INDEX_SPACE, declared) is False
+
+    def test_built_in_record_index_safe_beside_start_zero_declaration(self) -> None:
+        declared = KeySpace(
+            space_class="record_index", prefix="", width=0, start=0, gaps=None
+        )
+        assert union_safe(_RECORD_INDEX_SPACE, declared) is True
+
+    def test_edge_gate_refuses_built_in_beside_start_one_registry_entry(self) -> None:
+        election = resolve_election(
+            _entity_sidecar(_record_index_presentation_keys(start=1)),
+            {"entity": {"alpha": "record_index", "beta": "presentation_id"}},
+        )
+        with pytest.raises(ElectionUnionUnsafe):
+            check_edge_union_safety(
+                election, "entity", ["alpha", "beta"], "orders.entity_id"
+            )
+
+    def test_edge_gate_passes_built_in_beside_start_zero_registry_entry(self) -> None:
+        election = resolve_election(
+            _entity_sidecar(_record_index_presentation_keys(start=0)),
+            {"entity": {"alpha": "record_index", "beta": "presentation_id"}},
+        )
+        check_edge_union_safety(
+            election, "entity", ["alpha", "beta"], "orders.entity_id"
+        )
 
 
 # ---------------------------------------------------------------------------

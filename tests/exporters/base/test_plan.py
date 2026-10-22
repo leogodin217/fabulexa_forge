@@ -12,7 +12,7 @@ from zoneinfo import ZoneInfo
 
 import pytest
 from _support.notices import RecordingNoticeSink, discard_notice_sink
-from _support.sidecar_builder import enum_options
+from _support.sidecar_builder import enum_options, key_space, partition_key
 
 from fabulexa_forge import SUPPORTED_BASE_FORMAT_VERSION
 from fabulexa_forge.anchor import EffectiveAnchor
@@ -154,31 +154,14 @@ def _sidecar(
     return Sidecar.from_raw(raw)
 
 
-def _raw_key_space(
-    space_class: str, *, prefix: str = "", width: int = 0
-) -> dict[str, object]:
-    """A raw key_space object of the given digit-rendered class."""
-    return {"class": space_class, "prefix": prefix, "width": width}
-
-
 def _raw_counter_key(prefix: str = "") -> dict[str, object]:
     """A conformant counter-class raw partition_key (emit/false/false)."""
-    return {
-        "unique_within": "emit",
-        "branch_stable": False,
-        "slice_stable": False,
-        "key_space": _raw_key_space("counter", prefix=prefix, width=3),
-    }
+    return partition_key(key_space("counter", prefix=prefix, width=3, start=1))
 
 
 def _raw_record_index_key() -> dict[str, object]:
     """A conformant record_index-class raw partition_key (branch/true/true)."""
-    return {
-        "unique_within": "branch",
-        "branch_stable": True,
-        "slice_stable": True,
-        "key_space": _raw_key_space("record_index", width=4),
-    }
+    return partition_key(key_space("record_index", prefix="", width=4, start=1))
 
 
 def _spanning_sidecar() -> Sidecar:

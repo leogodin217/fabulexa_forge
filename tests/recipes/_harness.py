@@ -48,26 +48,30 @@ class RecipeExpectationError(Exception):
 # Manifest / validate agreement scoping
 # ---------------------------------------------------------------------------
 
-# fabulexa_forge.corrupters.manifest.ImpactCode's vocabulary: C6, C7, C9-C13, or
-# the 'beyond-c1-c12' sentinel. C13's genesis clause is breakable and declarable
+# fabulexa_forge.corrupters.manifest.ImpactCode's vocabulary: C6, C7, C9-C13, C16,
+# or the 'beyond-c1-c12' sentinel. C13's genesis clause is breakable and declarable
 # (insert_rows, schema_drift rename, shift_sim_time offset, drop_events), so it is
-# inside the comparison vocabulary. C14 stays outside it entirely -- a sidecar-only
-# sub-type check no corrupter can break -- so a manifest impact union never carries
-# it and validate()'s failing set is scoped to exclude it.
-_MANIFEST_VOCABULARY: frozenset[str] = frozenset(f"C{i}" for i in range(1, 14))
+# inside the comparison vocabulary, as is C16 (the cell-mutation operations).
+# C14 and C15 stay outside it entirely -- a sidecar-only check and a surface-only
+# check no corrupter can break -- so a manifest impact union never carries them
+# and validate()'s failing set is scoped to exclude them.
+_MANIFEST_VOCABULARY: frozenset[str] = frozenset(
+    {*(f"C{i}" for i in range(1, 14)), "C16"}
+)
 
 
 def failing_checks_in_manifest_vocabulary(report: "ConformanceReport") -> set[str]:
-    """The subset of validate()'s failing checks within the manifest's C1-C13 vocabulary.
+    """The subset of validate()'s failing checks within the manifest's vocabulary.
 
     Args:
         report: A ConformanceReport from conformance.validate().
 
     Returns:
-        The failing check ids intersected with C1-C13. C14 is excluded: the
-        manifest's ImpactCode vocabulary cannot express it (no corrupter can break
-        a sidecar-only sub-type check), so a C14 break stays outside both sides of
-        a manifest/validate agreement comparison.
+        The failing check ids intersected with C1-C13 and C16. C14 and C15
+        are excluded: the manifest's ImpactCode vocabulary cannot express them (no
+        corrupter can break a sidecar-only sub-type check or a surface-only check),
+        so a C14/C15 break stays outside both sides of a manifest/validate
+        agreement comparison.
     """
     return {r.check for r in report.results if not r.passed} & _MANIFEST_VOCABULARY
 

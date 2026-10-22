@@ -658,6 +658,7 @@ def _conflict_sidecar(
     *,
     pinned_ids: dict[str, dict[str, str]] | None = None,
     record_roles: RecordRoles | None = None,
+    enum_domains: dict[str, dict[str, tuple[str, ...]]] | None = None,
 ) -> Sidecar:
     return Sidecar(
         raw={},
@@ -666,7 +667,7 @@ def _conflict_sidecar(
         tables=tables,
         runtime=None,
         pinned_ids=pinned_ids or {},
-        enum_domains={},
+        enum_domains=enum_domains or {},
         record_roles=record_roles,
         sub_type_columns=None,
         presentation_keys_raw=None,
@@ -875,6 +876,67 @@ def test_mutation_c12_and_c6_union() -> None:
     )
     outcome = _apply_conflict(state, op, sc, seed=1)
     assert set(outcome.defects[0].impact) == {"C6", "C12"}
+
+
+_ACTOR_TYPE_DOMAIN = {"actor": {"actor_type": ("doctor", "nurse")}}
+
+
+def _actor_mutation_impact(
+    mutation: object,
+    *,
+    enum_domains: dict[str, dict[str, tuple[str, ...]]] | None,
+    tracked: bool = False,
+) -> tuple[str, ...]:
+    """Apply a conflicting-duplicate mutation to an actor_type cell and return
+    the declared impact."""
+    history = (
+        [_conflict_history_row("a1", "actor_type", "doctor", kind="actor")]
+        if tracked
+        else []
+    )
+    state = CorruptState(
+        tables={
+            "records__actor": working_table(
+                _conflict_actor_spec(), [_conflict_actor_row("a1", "doctor")]
+            ),
+            "history": working_table(_conflict_history_spec(), history),
+        }
+    )
+    sc = _conflict_sidecar((_conflict_actor_spec(),), enum_domains=enum_domains)
+    op = _mutation_op("records__actor", ["prop__actor_type"], mutation)
+    return _apply_conflict(state, op, sc, seed=1).defects[0].impact
+
+
+def test_mutation_c16_enum_domained_cell_out_of_domain() -> None:
+    impact = _actor_mutation_impact(
+        MutationSentinel(kind="sentinel", value="ghost"),
+        enum_domains=_ACTOR_TYPE_DOMAIN,
+    )
+    assert impact == ("C16",)
+
+
+def test_mutation_c16_joins_c6_union() -> None:
+    impact = _actor_mutation_impact(
+        MutationSentinel(kind="sentinel", value="ghost"),
+        enum_domains=_ACTOR_TYPE_DOMAIN,
+        tracked=True,
+    )
+    assert set(impact) == {"C6", "C16"}
+
+
+def test_mutation_declared_value_on_enum_domained_cell_declares_no_c16() -> None:
+    impact = _actor_mutation_impact(
+        MutationSentinel(kind="sentinel", value="nurse"),
+        enum_domains=_ACTOR_TYPE_DOMAIN,
+    )
+    assert impact == ("beyond-c1-c12",)
+
+
+def test_mutation_without_registry_declares_no_c16() -> None:
+    impact = _actor_mutation_impact(
+        MutationSentinel(kind="sentinel", value="ghost"), enum_domains=None
+    )
+    assert impact == ("beyond-c1-c12",)
 
 
 def test_mutation_seeded_kind_draws_once_per_row_per_resolved_column_in_order() -> None:

@@ -1,20 +1,26 @@
 """Tests for the one sidecar-fixture authority: prop_column, identity_column,
-and write_emit."""
+key_space, partition_key, and write_emit."""
 
 from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import TYPE_CHECKING, Any
 
 import pytest
 
 from _support.sidecar_builder import (
     UNSUPPORTED_VERSION_SENTINEL,
     identity_column,
+    key_space,
+    partition_key,
     prop_column,
     write_emit,
 )
 from fabulexa_forge import SUPPORTED_BASE_FORMAT_VERSION
+
+if TYPE_CHECKING:
+    from _support.sidecar_builder import KeySpaceClass
 
 _FIRINGS_TABLE: dict[str, object] = {
     "name": "firings",
@@ -137,6 +143,152 @@ def test_identity_column_rejects_non_identity_name(name: str) -> None:
     """A name that does not classify as identity (payload or lifecycle) raises."""
     with pytest.raises(ValueError, match=name):
         identity_column(name, "VARCHAR")
+
+
+# ---------------------------------------------------------------------------
+# key_space / partition_key
+# ---------------------------------------------------------------------------
+
+
+def test_key_space_digit_rendered_without_gaps() -> None:
+    """A digit-rendered class carries prefix/width/start and no gaps member."""
+    assert key_space("counter", prefix="WARD_", width=3, start=1) == {
+        "class": "counter",
+        "prefix": "WARD_",
+        "width": 3,
+        "start": 1,
+    }
+
+
+def test_key_space_digit_rendered_zero_valued_texture_is_present() -> None:
+    """Falsy-but-declared texture (empty prefix, width 0, start 0) is rendered."""
+    assert key_space("record_index", prefix="", width=0, start=0) == {
+        "class": "record_index",
+        "prefix": "",
+        "width": 0,
+        "start": 0,
+    }
+
+
+def test_key_space_digit_rendered_with_gaps() -> None:
+    """gaps renders as {"rate", "max"} from the (rate, max) pair."""
+    assert key_space("record_index", prefix="", width=4, start=1, gaps=(0.25, 3)) == {
+        "class": "record_index",
+        "prefix": "",
+        "width": 4,
+        "start": 1,
+        "gaps": {"rate": 0.25, "max": 3},
+    }
+
+
+@pytest.mark.parametrize("space_class", ["uuid", "record_id"])
+def test_key_space_non_digit_rendered_is_class_only(space_class: KeySpaceClass) -> None:
+    """A non-digit-rendered class renders as {"class": ...} alone."""
+    assert key_space(space_class) == {"class": space_class}
+
+
+@pytest.mark.parametrize("space_class", ["counter", "record_index"])
+@pytest.mark.parametrize("missing", ["prefix", "width", "start"])
+def test_key_space_digit_rendered_missing_texture_member_raises(
+    space_class: KeySpaceClass, missing: str
+) -> None:
+    """A digit-rendered class missing any of prefix/width/start raises, naming it."""
+    texture: dict[str, Any] = {"prefix": "P_", "width": 3, "start": 1}
+    del texture[missing]
+    with pytest.raises(ValueError, match=missing):
+        key_space(space_class, **texture)
+
+
+@pytest.mark.parametrize("space_class", ["uuid", "record_id"])
+@pytest.mark.parametrize(
+    "texture",
+    [
+        {"prefix": "P_"},
+        {"width": 3},
+        {"start": 1},
+        {"gaps": (0.1, 2)},
+    ],
+    ids=["prefix", "width", "start", "gaps"],
+)
+def test_key_space_non_digit_rendered_with_texture_raises(
+    space_class: KeySpaceClass, texture: dict[str, Any]
+) -> None:
+    """A non-digit-rendered class given any texture member raises, naming it."""
+    with pytest.raises(ValueError, match=next(iter(texture))):
+        key_space(space_class, **texture)
+
+
+def test_partition_key_counter_derives_emit_unstable_scalars() -> None:
+    """'counter' -> emit / branch_stable False / slice_stable False."""
+    space = key_space("counter", prefix="", width=0, start=1)
+    assert partition_key(space) == {
+        "unique_within": "emit",
+        "branch_stable": False,
+        "slice_stable": False,
+        "key_space": space,
+    }
+
+
+@pytest.mark.parametrize(
+    "space",
+    [
+        key_space("record_index", prefix="", width=0, start=1),
+        key_space("uuid"),
+        key_space("record_id"),
+    ],
+    ids=["record_index", "uuid", "record_id"],
+)
+def test_partition_key_stable_classes_derive_branch_stable_scalars(
+    space: dict[str, object],
+) -> None:
+    """Every non-counter class -> branch / True / True."""
+    assert partition_key(space) == {
+        "unique_within": "branch",
+        "branch_stable": True,
+        "slice_stable": True,
+        "key_space": space,
+    }
+
+
+@pytest.mark.parametrize("space", [{}, {"class": "bogus"}], ids=["absent", "unknown"])
+def test_partition_key_unrecognized_class_raises(space: dict[str, object]) -> None:
+    """A key_space with no recognized class raises ValueError."""
+    with pytest.raises(ValueError, match="class"):
+        partition_key(space)
+
+
+def test_write_emit_accepts_constructor_built_presentation_keys(
+    tmp_path: Path,
+) -> None:
+    """Constructor output, texture and gaps included, passes the schema net
+    inside a presentation_keys block and is carried verbatim."""
+    entry = partition_key(
+        key_space("record_index", prefix="WARD_", width=3, start=1, gaps=(0.1, 2))
+    )
+    write_emit(
+        tmp_path,
+        tables=[_FIRINGS_TABLE],
+        extra={"presentation_keys": {"ward": {"key": entry}}},
+    )
+    sidecar = json.loads((tmp_path / "base.json").read_text(encoding="utf-8"))
+    assert sidecar["presentation_keys"]["ward"]["key"] == entry
+
+
+def test_write_emit_rejects_hand_built_key_space_missing_texture(
+    tmp_path: Path,
+) -> None:
+    """A digit-rendered key_space missing `start` (mutated from the constructor) fails the schema net at
+    construction -- the constructors are the only conformant path."""
+    space = key_space("counter", prefix="", width=0, start=1)
+    del space["start"]
+    hand_built = partition_key(space)
+    with pytest.raises(ValueError, match="start"):
+        write_emit(
+            tmp_path,
+            tables=[_FIRINGS_TABLE],
+            extra={"presentation_keys": {"ward": {"key": hand_built}}},
+        )
+    assert not (tmp_path / "base.json").exists()
 
 
 # ---------------------------------------------------------------------------

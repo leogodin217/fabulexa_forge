@@ -28,6 +28,8 @@ from _support.notices import discard_notice_sink
 from _support.sidecar_builder import (
     enum_options,
     identity_column,
+    key_space,
+    partition_key,
     prop_column,
     write_emit,
 )
@@ -1448,12 +1450,9 @@ _SUBTYPED_ACTOR_COLUMNS = [
 _CONSULTANT_ONLY_PRESENTATION_KEYS: dict[str, object] = {
     "actor": {
         "sub_types": {
-            "consultant": {
-                "unique_within": "emit",
-                "branch_stable": False,
-                "slice_stable": False,
-                "key_space": {"class": "counter", "prefix": "CONS_", "width": 3},
-            }
+            "consultant": partition_key(
+                key_space("counter", prefix="CONS_", width=3, start=1)
+            )
         },
         "unique_within": "emit",
         "branch_stable": False,

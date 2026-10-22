@@ -1,4 +1,4 @@
-"""Conformance checks C1–C15 for base-layer emits.
+"""Conformance checks C1–C16 for base-layer emits.
 
 Independent reimplementation of the base-format conformance procedure.
 Zero imports outside the vendored contract. Reads the vendored JSON Schema and DuckDB
@@ -30,13 +30,13 @@ from fabulexa_forge.reader.sidecar import ColumnSpec, RecordRoles, TemporalClass
 
 @dataclass(frozen=True)
 class CheckResult:
-    """Outcome of one conformance check (C1–C15).
+    """Outcome of one conformance check (C1–C16).
 
     `passed` is the authoritative verdict; `messages` and `skips` are diagnostics
     and never decide pass/fail.
     """
 
-    check: str  # "C1" .. "C15"
+    check: str  # "C1" .. "C16"
     passed: bool
     messages: tuple[str, ...]  # failure detail; empty when passed
     skips: tuple[str, ...]  # parts deliberately not examined. Informational.
@@ -44,9 +44,9 @@ class CheckResult:
 
 @dataclass(frozen=True)
 class ConformanceReport:
-    """Aggregate outcome of running C1–C15 over one emit."""
+    """Aggregate outcome of running C1–C16 over one emit."""
 
-    results: tuple[CheckResult, ...]  # one per check, in C1..C15 order
+    results: tuple[CheckResult, ...]  # one per check, in C1..C16 order
 
     @property
     def ok(self) -> bool:
@@ -2080,6 +2080,99 @@ def _check_c15(emit: "Emit") -> CheckResult:
     )
 
 
+def _check_c16_pair(
+    emit: "Emit",
+    kind: str,
+    prop: str,
+    options: tuple[str, ...],
+    catalog_tables: set[str],
+    messages: list[str],
+    skips: list[str],
+) -> None:
+    """Check C16's domain closure for one registry (kind, property) pair.
+
+    Args:
+        emit: An open emit.
+        kind: The registry kind.
+        prop: The registry property (without its `prop__` prefix).
+        options: The entry's declared option strings.
+        catalog_tables: Pre-fetched set of table names in the catalog.
+        messages: Accumulator for failure messages.
+        skips: Accumulator for skip messages.
+    """
+    table_name = f"records__{kind}"
+    if table_name not in catalog_tables:
+        skips.append(
+            f"C16: table {table_name!r} absent from catalog — "
+            f"({kind!r}, {prop!r}) skipped"
+        )
+        return
+    column = f"prop__{prop}"
+    if column not in {name for name, _ in _catalog_columns(emit, table_name)}:
+        skips.append(
+            f"C16: column {column!r} absent from {table_name!r} — "
+            f"({kind!r}, {prop!r}) skipped"
+        )
+        return
+    quoted_column = _quote_identifier(column)
+    rows = emit.query(
+        f"SELECT DISTINCT CAST({quoted_column} AS VARCHAR) "
+        f"FROM {_quote_identifier(table_name)} WHERE {quoted_column} IS NOT NULL",
+        (),
+    )
+    offending = sorted({str(row[0]) for row in rows} - set(options))
+    if offending:
+        messages.append(
+            f"C16: records__{kind} prop__{prop} carries value(s) {offending!r} "
+            f"outside its declared enum_domains options {list(options)!r}"
+        )
+
+
+def _check_c16(emit: "Emit") -> CheckResult:
+    """C16: Domain closure.
+
+    For each (kind, property) in the sidecar's enum_domains registry whose
+    records__<kind> table exists in the catalog and carries prop__<property>:
+    every non-NULL value in that column, cast to VARCHAR, is one of the
+    entry's declared option strings. The inverse of the registry's
+    intent-not-observation stance: a declared option with no live row is
+    conformant; a live value outside the declared list is the violation.
+    Failure messages name the kind, property, and the sorted distinct
+    offending values.
+
+    Skips (recorded, not failures): enum_domains absent entirely; a registry
+    kind with no records table in the emit (the registry is run-wide; an
+    emit's table set may be narrower); a registry property whose column the
+    table does not carry. Reads the registry through the sidecar's parsed
+    enum_domains view, never the raw block.
+
+    Args:
+        emit: An open emit.
+
+    Returns:
+        A CheckResult for check id "C16".
+    """
+    messages: list[str] = []
+    skips: list[str] = []
+
+    enum_domains = emit.sidecar.enum_domains()
+    if not enum_domains:
+        skips.append("enum_domains absent from sidecar — C16 skipped")
+        return CheckResult(check="C16", passed=True, messages=(), skips=tuple(skips))
+
+    catalog_tables = _catalog_tables(emit)
+    for kind, properties in enum_domains.items():
+        for prop, options in properties.items():
+            _check_c16_pair(emit, kind, prop, options, catalog_tables, messages, skips)
+
+    return CheckResult(
+        check="C16",
+        passed=len(messages) == 0,
+        messages=tuple(messages),
+        skips=tuple(skips),
+    )
+
+
 # ---------------------------------------------------------------------------
 # Check registry
 # ---------------------------------------------------------------------------
@@ -2100,6 +2193,7 @@ _CHECKS: dict[str, Callable[["Emit"], CheckResult]] = {
     "C13": _check_c13,
     "C14": _check_c14,
     "C15": _check_c15,
+    "C16": _check_c16,
 }
 
 _RECOGNIZED_IDS: tuple[str, ...] = (
@@ -2118,6 +2212,7 @@ _RECOGNIZED_IDS: tuple[str, ...] = (
     "C13",
     "C14",
     "C15",
+    "C16",
 )
 
 
@@ -2127,14 +2222,15 @@ _RECOGNIZED_IDS: tuple[str, ...] = (
 
 
 def validate(emit: "Emit") -> ConformanceReport:
-    """Run conformance checks C1–C15 against an opened emit.
+    """Run conformance checks C1–C16 against an opened emit.
 
     Reimplements the base-format conformance procedure independently of the
     producer's emitters.conformance. C1 validates base.json against the vendored
     JSON Schema; C2–C5 check catalog/sidecar agreement, required tables,
     and column shapes; C6–C13 check data-level integrity; C14 checks the
     sub-type column partition's consistency against the sidecar; C15 checks
-    the sidecar's `surface` discriminator.
+    the sidecar's `surface` discriminator; C16 checks that every live value of
+    an enum-domained records property lies inside its declared domain.
 
     A conformance failure is reported as a failing CheckResult, never raised:
     callers inspect the report and choose an exit code. Operational failures
@@ -2144,7 +2240,7 @@ def validate(emit: "Emit") -> ConformanceReport:
         emit: An emit already opened — and therefore version-gated — by open_emit.
 
     Returns:
-        A ConformanceReport with one CheckResult per check, in C1..C15 order.
+        A ConformanceReport with one CheckResult per check, in C1..C16 order.
 
     Raises:
         RunDatabaseError: An operational failure reading run.duckdb mid-check.
@@ -2163,7 +2259,7 @@ def run_check(emit: "Emit", check_id: str) -> CheckResult:
 
     Args:
         emit: An opened emit.
-        check_id: One of "C1" .. "C15".
+        check_id: One of "C1" .. "C16".
 
     Returns:
         The CheckResult for that check.

@@ -33,6 +33,8 @@ import duckdb
 from _support.sidecar_builder import (
     enum_options,
     identity_column,
+    key_space,
+    partition_key,
     prop_column,
     write_emit,
 )
@@ -854,29 +856,15 @@ def build_source_keys_emit(tmp_path: Path) -> Path:
             },
             "presentation_keys": {
                 "visit": {
-                    "key": {
-                        "unique_within": "branch",
-                        "branch_stable": True,
-                        "slice_stable": True,
-                        "key_space": {
-                            "class": "record_index",
-                            "prefix": "",
-                            "width": 4,
-                        },
-                    }
+                    "key": partition_key(
+                        key_space("record_index", prefix="", width=4, start=1)
+                    )
                 },
                 "actor": {
                     "sub_types": {
-                        "consultant": {
-                            "unique_within": "branch",
-                            "branch_stable": True,
-                            "slice_stable": True,
-                            "key_space": {
-                                "class": "record_index",
-                                "prefix": "",
-                                "width": 4,
-                            },
-                        }
+                        "consultant": partition_key(
+                            key_space("record_index", prefix="", width=4, start=1)
+                        )
                     },
                     "unique_within": "branch",
                     "branch_stable": True,
@@ -1123,42 +1111,21 @@ def build_source_election_emit(tmp_path: Path, *, corrupt_device: bool = False) 
             "presentation_keys": {
                 "device": {
                     "sub_types": {
-                        "day": {
-                            "unique_within": "emit",
-                            "branch_stable": False,
-                            "slice_stable": False,
-                            "key_space": {
-                                "class": "counter",
-                                "prefix": "DAY_",
-                                "width": 3,
-                            },
-                        },
-                        "night": {
-                            "unique_within": "emit",
-                            "branch_stable": False,
-                            "slice_stable": False,
-                            "key_space": {
-                                "class": "counter",
-                                "prefix": "NIGHT_",
-                                "width": 3,
-                            },
-                        },
+                        "day": partition_key(
+                            key_space("counter", prefix="DAY_", width=3, start=1)
+                        ),
+                        "night": partition_key(
+                            key_space("counter", prefix="NIGHT_", width=3, start=1)
+                        ),
                     },
                     "unique_within": "emit",
                     "branch_stable": False,
                     "slice_stable": False,
                 },
                 "order": {
-                    "key": {
-                        "unique_within": "emit",
-                        "branch_stable": False,
-                        "slice_stable": False,
-                        "key_space": {
-                            "class": "counter",
-                            "prefix": "ORD_",
-                            "width": 3,
-                        },
-                    }
+                    "key": partition_key(
+                        key_space("counter", prefix="ORD_", width=3, start=1)
+                    )
                 },
             },
         },
@@ -1292,16 +1259,9 @@ def build_corrupted_junction_member_emit(tmp_path: Path) -> Path:
             "presentation_keys": {
                 "device": {
                     "sub_types": {
-                        "solo": {
-                            "unique_within": "emit",
-                            "branch_stable": False,
-                            "slice_stable": False,
-                            "key_space": {
-                                "class": "counter",
-                                "prefix": "DUP_",
-                                "width": 3,
-                            },
-                        }
+                        "solo": partition_key(
+                            key_space("counter", prefix="DUP_", width=3, start=1)
+                        )
                     },
                     "unique_within": "emit",
                     "branch_stable": False,
@@ -1784,26 +1744,12 @@ def build_split_actor_presentation_id_emit(
             "presentation_keys": {
                 "actor": {
                     "sub_types": {
-                        "consultant": {
-                            "unique_within": "emit",
-                            "branch_stable": False,
-                            "slice_stable": False,
-                            "key_space": {
-                                "class": "counter",
-                                "prefix": "CONS_",
-                                "width": 3,
-                            },
-                        },
-                        "nurse": {
-                            "unique_within": "emit",
-                            "branch_stable": False,
-                            "slice_stable": False,
-                            "key_space": {
-                                "class": "counter",
-                                "prefix": "NURSE_",
-                                "width": 3,
-                            },
-                        },
+                        "consultant": partition_key(
+                            key_space("counter", prefix="CONS_", width=3, start=1)
+                        ),
+                        "nurse": partition_key(
+                            key_space("counter", prefix="NURSE_", width=3, start=1)
+                        ),
                     },
                     "unique_within": "emit",
                     "branch_stable": False,

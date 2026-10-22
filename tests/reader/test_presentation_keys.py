@@ -10,12 +10,15 @@ coherence defect a test targets.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import pytest
-from _support.sidecar_builder import enum_options
+from _support.sidecar_builder import enum_options, key_space, partition_key
 
 from fabulexa_forge import SUPPORTED_BASE_FORMAT_VERSION
 from fabulexa_forge.reader.errors import PresentationKeysInvalidError
 from fabulexa_forge.reader.sidecar import (
+    Gaps,
     KeySpace,
     PartitionKey,
     Sidecar,
@@ -23,6 +26,9 @@ from fabulexa_forge.reader.sidecar import (
     combined_claim,
     union_safe,
 )
+
+if TYPE_CHECKING:
+    from _support.sidecar_builder import KeySpaceClass
 
 # ---------------------------------------------------------------------------
 # Raw-dict helpers (sidecar JSON shape, for Sidecar.from_raw fixtures)
@@ -64,18 +70,6 @@ def _raw_sidecar(
     return raw
 
 
-def _raw_key_space(
-    space_class: str, *, prefix: str | None = None, width: int | None = None
-) -> dict[str, object]:
-    """A raw key_space object, presence of prefix/width controlled by the caller."""
-    raw: dict[str, object] = {"class": space_class}
-    if prefix is not None:
-        raw["prefix"] = prefix
-    if width is not None:
-        raw["width"] = width
-    return raw
-
-
 def _raw_partition_key(
     unique_within: str,
     branch_stable: bool,
@@ -93,26 +87,43 @@ def _raw_partition_key(
 
 def _raw_counter_key(prefix: str = "", width: int = 0) -> dict[str, object]:
     """A conformant counter-class raw partition_key (emit/false/false)."""
-    return _raw_partition_key(
-        "emit", False, False, _raw_key_space("counter", prefix=prefix, width=width)
-    )
+    return partition_key(key_space("counter", prefix=prefix, width=width, start=1))
 
 
 def _raw_record_index_key(prefix: str = "", width: int = 0) -> dict[str, object]:
     """A conformant record_index-class raw partition_key (branch/true/true)."""
-    return _raw_partition_key(
-        "branch", True, True, _raw_key_space("record_index", prefix=prefix, width=width)
-    )
+    return partition_key(key_space("record_index", prefix=prefix, width=width, start=1))
 
 
 def _raw_uuid_key() -> dict[str, object]:
     """A conformant uuid-class raw partition_key (branch/true/true)."""
-    return _raw_partition_key("branch", True, True, _raw_key_space("uuid"))
+    return partition_key(key_space("uuid"))
 
 
 def _raw_record_id_key() -> dict[str, object]:
     """A conformant record_id-class raw partition_key (branch/true/true)."""
-    return _raw_partition_key("branch", True, True, _raw_key_space("record_id"))
+    return partition_key(key_space("record_id"))
+
+
+def _with(space: dict[str, object], **members: object) -> dict[str, object]:
+    """A copy of a key_space dict with the given members set — the shape-defective
+    negative fixtures mutate the constructor's output, never hand-build it."""
+    return {**space, **members}
+
+
+def _without(space: dict[str, object], *names: str) -> dict[str, object]:
+    """A copy of a key_space dict with the named members removed."""
+    return {name: value for name, value in space.items() if name not in names}
+
+
+def _ward_sidecar_with_key_space(space: dict[str, object]) -> Sidecar:
+    """A flat `ward` kind whose single key carries `space` (scalars derived)."""
+    return Sidecar.from_raw(
+        _raw_sidecar(
+            [_records_table("ward", presentation_id=True)],
+            presentation_keys={"ward": {"key": partition_key(space)}},
+        )
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -121,9 +132,20 @@ def _raw_record_id_key() -> dict[str, object]:
 
 
 def _ks(
-    space_class: str, *, prefix: str | None = None, width: int | None = None
+    space_class: KeySpaceClass,
+    *,
+    prefix: str | None = None,
+    width: int | None = None,
+    start: int | None = None,
+    gaps: Gaps | None = None,
 ) -> KeySpace:
-    return KeySpace(space_class=space_class, prefix=prefix, width=width)  # type: ignore[arg-type]
+    return KeySpace(
+        space_class=space_class,
+        prefix=prefix,
+        width=width,
+        start=start,
+        gaps=gaps,
+    )
 
 
 def _pk(
@@ -171,7 +193,9 @@ def test_coherent_flat_kind() -> None:
         unique_within="emit",
         branch_stable=False,
         slice_stable=False,
-        key_space=KeySpace(space_class="counter", prefix="WARD_", width=3),
+        key_space=KeySpace(
+            space_class="counter", prefix="WARD_", width=3, start=1, gaps=None
+        ),
     )
     with pytest.raises(ValueError):
         pk.sub_types("ward")
@@ -233,7 +257,9 @@ def test_coherent_partitioned_kind() -> None:
         unique_within="branch",
         branch_stable=True,
         slice_stable=True,
-        key_space=KeySpace(space_class="record_index", prefix="PAT_", width=4),
+        key_space=KeySpace(
+            space_class="record_index", prefix="PAT_", width=4, start=1, gaps=None
+        ),
     )
     with pytest.raises(KeyError):
         pk.key_for("actor", "undeclared_sub_type")
@@ -398,8 +424,10 @@ def test_clause_d_sub_type_outside_discriminator_domain() -> None:
 @pytest.mark.parametrize(
     "key_space",
     [
-        _raw_key_space("counter", prefix="WARD_", width=3),  # counter claiming branch
-        _raw_key_space("uuid"),  # uuid claiming emit
+        key_space(
+            "counter", prefix="WARD_", width=3, start=1
+        ),  # counter claiming branch
+        key_space("uuid"),  # uuid claiming emit
     ],
     ids=["counter_claiming_branch", "uuid_claiming_emit"],
 )
@@ -424,36 +452,164 @@ def test_clause_e_scalars_inconsistent_with_key_space_class(
         Sidecar.from_raw(raw).presentation_keys()
 
 
-def test_clause_f_prefix_width_present_on_uuid() -> None:
-    """(f) prefix/width present on a non-digit-rendered class (uuid)."""
-    raw = _raw_sidecar(
-        [_records_table("ward", presentation_id=True)],
-        presentation_keys={
-            "ward": {
-                "key": _raw_partition_key(
-                    "branch", True, True, _raw_key_space("uuid", prefix="", width=0)
-                )
-            }
-        },
-    )
-    with pytest.raises(PresentationKeysInvalidError, match="ward"):
-        Sidecar.from_raw(raw).presentation_keys()
+_COUNTER_SPACE = key_space("counter", prefix="WARD_", width=3, start=1)
 
 
-def test_clause_f_prefix_width_absent_on_counter() -> None:
-    """(f) prefix/width absent on a digit-rendered class (counter)."""
-    raw = _raw_sidecar(
-        [_records_table("ward", presentation_id=True)],
-        presentation_keys={
-            "ward": {
-                "key": _raw_partition_key(
-                    "emit", False, False, _raw_key_space("counter")
-                )
-            }
-        },
-    )
+def test_clause_f_texture_present_on_uuid() -> None:
+    """(f) prefix/width/start present on a non-digit-rendered class (uuid)."""
+    space = _with(key_space("uuid"), prefix="", width=0, start=1)
     with pytest.raises(PresentationKeysInvalidError, match="ward"):
-        Sidecar.from_raw(raw).presentation_keys()
+        _ward_sidecar_with_key_space(space).presentation_keys()
+
+
+@pytest.mark.parametrize("member", ["prefix", "width", "start"])
+def test_clause_f_texture_member_absent_on_counter(member: str) -> None:
+    """(f) any one of prefix/width/start absent on a digit-rendered class."""
+    space = _without(_COUNTER_SPACE, member)
+    with pytest.raises(
+        PresentationKeysInvalidError, match="ward.*prefix/width/start presence"
+    ):
+        _ward_sidecar_with_key_space(space).presentation_keys()
+
+
+def test_clause_f_start_present_on_non_digit_rendered_class() -> None:
+    """(f) `start` alone on a non-digit-rendered class."""
+    space = _with(key_space("record_id"), start=1)
+    with pytest.raises(
+        PresentationKeysInvalidError, match="ward.*prefix/width/start presence"
+    ):
+        _ward_sidecar_with_key_space(space).presentation_keys()
+
+
+@pytest.mark.parametrize(
+    "start",
+    [True, False, -1, 1.0, "1", None],
+    ids=["true", "false", "negative", "float", "string", "null"],
+)
+def test_clause_f_start_not_a_non_negative_integer(start: object) -> None:
+    """(f) `start` boolean, negative, or otherwise not an integer."""
+    space = _with(_COUNTER_SPACE, start=start)
+    with pytest.raises(
+        PresentationKeysInvalidError, match="ward.*start must be a non-negative"
+    ):
+        _ward_sidecar_with_key_space(space).presentation_keys()
+
+
+@pytest.mark.parametrize("space_class", ["uuid", "record_id"])
+def test_clause_f_gaps_on_non_digit_rendered_class(space_class: KeySpaceClass) -> None:
+    """(f) `gaps` on a non-digit-rendered class."""
+    space = _with(key_space(space_class), gaps={"rate": 0.1, "max": 3})
+    with pytest.raises(PresentationKeysInvalidError, match="ward.*must not carry gaps"):
+        _ward_sidecar_with_key_space(space).presentation_keys()
+
+
+@pytest.mark.parametrize(
+    "gaps",
+    [
+        {"max": 3},
+        {"rate": 0.1},
+        {"rate": 0.1, "max": 3, "extra": 1},
+        {},
+        "not-an-object",
+        None,
+    ],
+    ids=[
+        "missing_rate",
+        "missing_max",
+        "extra_member",
+        "empty",
+        "not_an_object",
+        "null",
+    ],
+)
+def test_clause_f_gaps_wrong_members(gaps: object) -> None:
+    """(f) `gaps` not an object carrying exactly `rate` and `max`."""
+    space = _with(_COUNTER_SPACE, gaps=gaps)
+    with pytest.raises(
+        PresentationKeysInvalidError, match="ward.*gaps must be an object"
+    ):
+        _ward_sidecar_with_key_space(space).presentation_keys()
+
+
+@pytest.mark.parametrize(
+    "gaps",
+    [
+        {"rate": True, "max": 3},
+        {"rate": "0.1", "max": 3},
+        {"rate": 0.1, "max": True},
+        {"rate": 0.1, "max": "3"},
+        {"rate": 0.1, "max": 3.0},
+    ],
+    ids=["rate_bool", "rate_string", "max_bool", "max_string", "max_float"],
+)
+def test_clause_f_gaps_members_mistyped(gaps: dict[str, object]) -> None:
+    """(f) `gaps.rate` bool/string, or `gaps.max` bool/string/float."""
+    space = _with(_COUNTER_SPACE, gaps=gaps)
+    with pytest.raises(
+        PresentationKeysInvalidError, match="ward.*gaps.rate/max must be"
+    ):
+        _ward_sidecar_with_key_space(space).presentation_keys()
+
+
+# ---------------------------------------------------------------------------
+# Key-space texture: accepted shapes
+# ---------------------------------------------------------------------------
+
+
+def _parsed_key_space(space: dict[str, object]) -> KeySpace:
+    """The KeySpace the strict registry view yields for `space` on a flat kind."""
+    pk = _ward_sidecar_with_key_space(space).presentation_keys()
+    assert pk is not None
+    return pk.key("ward").key_space
+
+
+def test_key_space_digit_rendered_start_without_gaps() -> None:
+    """A digit-rendered entry with `start` and no `gaps` parses to gaps=None."""
+    assert _parsed_key_space(_COUNTER_SPACE) == KeySpace(
+        space_class="counter", prefix="WARD_", width=3, start=1, gaps=None
+    )
+
+
+@pytest.mark.parametrize("start", [0, 1, 250])
+def test_key_space_start_values_pass_through_verbatim(start: int) -> None:
+    """`start` is carried verbatim, including 0."""
+    space = key_space("counter", prefix="", width=0, start=start)
+    assert _parsed_key_space(space).start == start
+
+
+def test_key_space_start_and_gaps_parse_to_typed_gaps() -> None:
+    """A digit-rendered entry with `start` and well-formed `gaps` parses to Gaps."""
+    space = key_space("counter", prefix="WARD_", width=3, start=5, gaps=(0.25, 4))
+    assert _parsed_key_space(space) == KeySpace(
+        space_class="counter",
+        prefix="WARD_",
+        width=3,
+        start=5,
+        gaps=Gaps(rate=0.25, max=4),
+    )
+
+
+def test_key_space_int_valued_gaps_rate_is_coerced_to_float() -> None:
+    """An int-valued `rate` parses to a float, so Gaps.rate is always a float."""
+    space = key_space("counter", prefix="", width=0, start=1, gaps=(1, 2))
+    gaps = _parsed_key_space(space).gaps
+    assert gaps == Gaps(rate=1.0, max=2)
+    assert gaps is not None
+    assert isinstance(gaps.rate, float)
+
+
+@pytest.mark.parametrize("space_class", ["uuid", "record_id"])
+def test_key_space_non_digit_rendered_carries_no_texture(
+    space_class: KeySpaceClass,
+) -> None:
+    """A non-digit-rendered entry with no texture parses to all-None texture."""
+    parsed = _parsed_key_space(key_space(space_class))
+    assert (parsed.prefix, parsed.width, parsed.start, parsed.gaps) == (
+        None,
+        None,
+        None,
+        None,
+    )
 
 
 def test_clause_g_rollup_wrong_scalar() -> None:
@@ -543,7 +699,9 @@ def test_guard_key_space_class_outside_enum() -> None:
         [_records_table("ward", presentation_id=True)],
         presentation_keys={
             "ward": {
-                "key": _raw_partition_key("emit", False, False, _raw_key_space("bogus"))
+                "key": _raw_partition_key(
+                    "emit", False, False, _with(key_space("uuid"), **{"class": "bogus"})
+                )
             }
         },
     )
@@ -561,7 +719,7 @@ def test_guard_key_space_prefix_width_wrong_type() -> None:
                     "emit",
                     False,
                     False,
-                    {"class": "counter", "prefix": 123, "width": "abc"},
+                    _with(_COUNTER_SPACE, prefix=123, width="abc"),
                 )
             }
         },
@@ -592,7 +750,7 @@ def test_guard_partition_key_scalars_missing_or_mistyped() -> None:
                     "unique_within": "emit",
                     "branch_stable": "not-a-bool",
                     "slice_stable": False,
-                    "key_space": _raw_key_space("counter", prefix="", width=0),
+                    "key_space": key_space("counter", prefix="", width=0, start=1),
                 }
             }
         },
@@ -713,14 +871,14 @@ def test_incoherent_block_parses_at_construction_without_raising() -> None:
     ("a", "b", "expected"),
     [
         pytest.param(
-            _ks("record_index", prefix="WARD_", width=3),
-            _ks("record_index", prefix="WARD_", width=3),
+            _ks("record_index", prefix="WARD_", width=3, start=1),
+            _ks("record_index", prefix="WARD_", width=3, start=1),
             True,
             id="identical_record_index",
         ),
         pytest.param(
-            _ks("record_index", prefix="WARD_", width=3),
-            _ks("record_index", prefix="WARD_", width=4),
+            _ks("record_index", prefix="WARD_", width=3, start=1),
+            _ks("record_index", prefix="WARD_", width=4, start=1),
             False,
             id="differing_width_record_index",
         ),
@@ -729,58 +887,165 @@ def test_incoherent_block_parses_at_construction_without_raising() -> None:
             _ks("record_id"), _ks("record_id"), True, id="record_id_x_record_id"
         ),
         pytest.param(
-            _ks("counter", prefix="WARD_", width=0),
-            _ks("counter", prefix="THTR_", width=0),
+            _ks("counter", prefix="WARD_", width=0, start=1),
+            _ks("counter", prefix="THTR_", width=0, start=1),
             True,
             id="incomparable_prefixes_ward_thtr",
         ),
         pytest.param(
-            _ks("counter", prefix="A-", width=0),
-            _ks("counter", prefix="A-1", width=0),
+            _ks("counter", prefix="A-", width=0, start=1),
+            _ks("counter", prefix="A-1", width=0, start=1),
             False,
             id="comparable_prefixes_a_dash",
         ),
         pytest.param(
-            _ks("counter", prefix="", width=0),
-            _ks("counter", prefix="1", width=0),
+            _ks("counter", prefix="", width=0, start=1),
+            _ks("counter", prefix="1", width=0, start=1),
             False,
             id="comparable_prefixes_empty_vs_digit",
         ),
         pytest.param(
-            _ks("counter", prefix="", width=0),
-            _ks("counter", prefix="X_", width=0),
+            _ks("counter", prefix="", width=0, start=1),
+            _ks("counter", prefix="X_", width=0, start=1),
             True,
             id="incomparable_prefixes_empty_vs_letter",
         ),
         pytest.param(
-            _ks("counter", prefix="A", width=3),
-            _ks("counter", prefix="A", width=3),
+            _ks("counter", prefix="A", width=3, start=1),
+            _ks("counter", prefix="A", width=3, start=1),
             False,
             id="equal_prefix_counters",
         ),
         pytest.param(
             _ks("uuid"),
-            _ks("counter", prefix="WARD_", width=3),
+            _ks("counter", prefix="WARD_", width=3, start=1),
             False,
             id="uuid_x_digit_rendered",
         ),
         pytest.param(
             _ks("record_id"),
-            _ks("counter", prefix="WARD_", width=3),
+            _ks("counter", prefix="WARD_", width=3, start=1),
             False,
             id="record_id_x_digit_rendered",
         ),
         pytest.param(
-            _ks("counter", prefix="A-1", width=0),
-            _ks("counter", prefix="A-", width=0),
+            _ks("counter", prefix="A-1", width=0, start=1),
+            _ks("counter", prefix="A-", width=0, start=1),
             False,
             id="comparable_prefixes_longer_first",
         ),
         pytest.param(
-            _ks("counter", prefix="X_", width=0),
-            _ks("counter", prefix="", width=0),
+            _ks("counter", prefix="X_", width=0, start=1),
+            _ks("counter", prefix="", width=0, start=1),
             True,
             id="incomparable_prefixes_longer_first",
+        ),
+        pytest.param(
+            _ks(
+                "record_index",
+                prefix="WARD_",
+                width=3,
+                start=1,
+            ),
+            _ks(
+                "record_index",
+                prefix="WARD_",
+                width=3,
+                start=0,
+            ),
+            False,
+            id="differing_start_record_index",
+        ),
+        pytest.param(
+            _ks(
+                "record_index",
+                prefix="WARD_",
+                width=3,
+                start=1,
+            ),
+            _ks(
+                "record_index",
+                prefix="WARD_",
+                width=3,
+                start=1,
+                gaps=Gaps(rate=0.1, max=3),
+            ),
+            False,
+            id="gaps_declared_on_one_side_record_index",
+        ),
+        pytest.param(
+            _ks(
+                "record_index",
+                prefix="WARD_",
+                width=3,
+                start=1,
+                gaps=Gaps(rate=0.1, max=3),
+            ),
+            _ks(
+                "record_index",
+                prefix="WARD_",
+                width=3,
+                start=1,
+                gaps=Gaps(rate=0.1, max=3),
+            ),
+            True,
+            id="identical_gaps_record_index",
+        ),
+        pytest.param(
+            _ks(
+                "record_index",
+                prefix="WARD_",
+                width=3,
+                start=1,
+                gaps=Gaps(rate=0.1, max=3),
+            ),
+            _ks(
+                "record_index",
+                prefix="WARD_",
+                width=3,
+                start=1,
+                gaps=Gaps(rate=0.2, max=3),
+            ),
+            False,
+            id="differing_gaps_rate_record_index",
+        ),
+        pytest.param(
+            _ks(
+                "record_index",
+                prefix="WARD_",
+                width=3,
+                start=1,
+                gaps=Gaps(rate=0.1, max=3),
+            ),
+            _ks(
+                "record_index",
+                prefix="WARD_",
+                width=3,
+                start=1,
+                gaps=Gaps(rate=0.1, max=4),
+            ),
+            False,
+            id="differing_gaps_max_record_index",
+        ),
+        pytest.param(
+            _ks("counter", prefix="A-", width=0, start=1),
+            _ks("counter", prefix="A-1", width=0, start=7, gaps=Gaps(rate=0.5, max=2)),
+            False,
+            id="comparable_prefixes_differing_texture_not_rescued",
+        ),
+        pytest.param(
+            _ks("record_index", prefix="", width=0, start=1),
+            _ks("counter", prefix="1", width=0, start=9, gaps=Gaps(rate=0.5, max=2)),
+            False,
+            id="comparable_prefixes_cross_class_texture_not_rescued",
+        ),
+        pytest.param(
+            _ks("counter", prefix="WARD_", width=0, start=1),
+            _ks(
+                "counter", prefix="THTR_", width=0, start=9, gaps=Gaps(rate=0.5, max=2)
+            ),
+            True,
+            id="incomparable_prefixes_any_texture",
         ),
     ],
 )
@@ -794,7 +1059,7 @@ def test_union_safe_pairwise_table(a: KeySpace, b: KeySpace, expected: bool) -> 
 
 
 def test_combined_claim_singleton_equals_entry_scalars() -> None:
-    entry = _pk("emit", False, False, _ks("counter", prefix="WARD_", width=3))
+    entry = _pk("emit", False, False, _ks("counter", prefix="WARD_", width=3, start=1))
     assert combined_claim([entry]) == WholeColumnClaim(
         unique_within="emit", branch_stable=False, slice_stable=False
     )
@@ -802,8 +1067,8 @@ def test_combined_claim_singleton_equals_entry_scalars() -> None:
 
 def test_combined_claim_all_counter() -> None:
     entries = [
-        _pk("emit", False, False, _ks("counter", prefix="WARD_", width=0)),
-        _pk("emit", False, False, _ks("counter", prefix="THTR_", width=0)),
+        _pk("emit", False, False, _ks("counter", prefix="WARD_", width=0, start=1)),
+        _pk("emit", False, False, _ks("counter", prefix="THTR_", width=0, start=1)),
     ]
     assert combined_claim(entries) == WholeColumnClaim(
         unique_within="emit", branch_stable=False, slice_stable=False
@@ -822,8 +1087,8 @@ def test_combined_claim_all_stable() -> None:
 
 def test_combined_claim_mixed() -> None:
     entries = [
-        _pk("emit", False, False, _ks("counter", prefix="A", width=0)),
-        _pk("branch", True, True, _ks("record_index", prefix="B", width=0)),
+        _pk("emit", False, False, _ks("counter", prefix="A", width=0, start=1)),
+        _pk("branch", True, True, _ks("record_index", prefix="B", width=0, start=1)),
     ]
     assert combined_claim(entries) == WholeColumnClaim(
         unique_within="branch", branch_stable=False, slice_stable=False
@@ -834,8 +1099,8 @@ def test_combined_claim_any_pair_unsafe_all_stable() -> None:
     """Pairwise-unsafe union of stable-class entries -> no uniqueness claim,
     stability true/true (every member is stable-class)."""
     entries = [
-        _pk("branch", True, True, _ks("record_index", prefix="", width=3)),
-        _pk("branch", True, True, _ks("record_index", prefix="", width=4)),
+        _pk("branch", True, True, _ks("record_index", prefix="", width=3, start=1)),
+        _pk("branch", True, True, _ks("record_index", prefix="", width=4, start=1)),
     ]
     claim = combined_claim(entries)
     assert claim.unique_within is None
@@ -846,13 +1111,48 @@ def test_combined_claim_any_pair_unsafe_all_stable() -> None:
 def test_combined_claim_any_pair_unsafe_not_all_stable() -> None:
     """Pairwise-unsafe union with a counter-class member -> stability false/false."""
     entries = [
-        _pk("emit", False, False, _ks("counter", prefix="", width=3)),
-        _pk("emit", False, False, _ks("counter", prefix="", width=3)),
+        _pk("emit", False, False, _ks("counter", prefix="", width=3, start=1)),
+        _pk("emit", False, False, _ks("counter", prefix="", width=3, start=1)),
     ]
     claim = combined_claim(entries)
     assert claim.unique_within is None
     assert claim.branch_stable is False
     assert claim.slice_stable is False
+
+
+def test_combined_claim_texture_divergent_record_index_pair() -> None:
+    """Identical prefix/width but differing start -> no uniqueness claim; the
+    stability pair (every member stable-class) is preserved."""
+    entries = [
+        _pk("branch", True, True, _ks("record_index", prefix="", width=3, start=1)),
+        _pk("branch", True, True, _ks("record_index", prefix="", width=3, start=0)),
+    ]
+    claim = combined_claim(entries)
+    assert claim.unique_within is None
+    assert claim.branch_stable is True
+    assert claim.slice_stable is True
+
+
+def test_combined_claim_identical_texture_record_index_pair_is_unique() -> None:
+    """The same pair with identical four-parameter texture keeps its claim."""
+    gaps = Gaps(rate=0.1, max=2)
+    entries = [
+        _pk(
+            "branch",
+            True,
+            True,
+            _ks("record_index", prefix="", width=3, start=1, gaps=gaps),
+        ),
+        _pk(
+            "branch",
+            True,
+            True,
+            _ks("record_index", prefix="", width=3, start=1, gaps=gaps),
+        ),
+    ]
+    assert combined_claim(entries) == WholeColumnClaim(
+        unique_within="branch", branch_stable=True, slice_stable=True
+    )
 
 
 def test_combined_claim_empty_raises_value_error() -> None:

@@ -1208,3 +1208,34 @@ def actor_subtype_undeclared(
     except KeyError:
         return True
     return False
+
+
+def enum_value_undeclared(
+    sidecar: "Sidecar", kind: str, column: str, post_value: object
+) -> bool:
+    """The C16 predicate for one mutated records cell.
+
+    Mirrors `_check_c16`'s domain-closure clause: True iff `column` is a
+    prop__<p> whose (kind, <p>) has an enum_domains entry and `post_value` is
+    a non-NULL string outside the declared option list. False when
+    enum_domains is absent, the (kind, property) is unregistered, the value is
+    None, or the value is not a string (the registry declares string domains;
+    a non-string post value on a registered column is unreachable through the
+    type-preserving transforms).
+
+    Args:
+        sidecar: The source emit's sidecar.
+        kind: The mutated cell's records kind.
+        column: The mutated cell's column name (prop__-prefixed).
+        post_value: The cell's post-mutation stored value.
+
+    Returns:
+        True iff C16, run on an emit written from this state, would report
+        this value as outside its declared domain.
+    """
+    if not column.startswith("prop__") or not isinstance(post_value, str):
+        return False
+    options = (
+        sidecar.enum_domains().get(kind, {}).get(property_name_for_prop_column(column))
+    )
+    return options is not None and post_value not in options

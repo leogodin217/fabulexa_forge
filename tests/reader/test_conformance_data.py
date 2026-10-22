@@ -2256,3 +2256,129 @@ def test_c14_included_in_full_validate_report(tmp_path: Path) -> None:
     c14 = [r for r in report.results if r.check == "C14"]
     assert len(c14) == 1
     assert c14[0].passed
+
+
+# ---------------------------------------------------------------------------
+# C16: domain closure
+# ---------------------------------------------------------------------------
+
+
+def _write_c16_emit(
+    dest: Path,
+    *,
+    enum_domains: dict[str, dict[str, list[dict[str, object]]]] | None,
+) -> Path:
+    """Write a records__actor emit (no data rows) for C16's skip paths.
+
+    Args:
+        dest: Directory to write into.
+        enum_domains: The registry; omitted from the sidecar when None.
+    """
+    tables: list[dict[str, object]] = [
+        {
+            "name": "history",
+            "category": "fixed",
+            "columns": list(_HISTORY_COLUMNS),
+            "rows": 0,
+        },
+        {
+            "name": "records__actor",
+            "category": "records",
+            "record_kind": "actor",
+            "columns": list(_C14_ACTOR_COLUMNS),
+            "rows": 0,
+        },
+    ]
+    sidecar = _single_branch_sidecar(tables)
+    if enum_domains is not None:
+        sidecar["enum_domains"] = enum_domains
+    return _write_emit(
+        dest,
+        sidecar,
+        {"history": _HISTORY_COLUMNS, "records__actor": _C14_ACTOR_COLUMNS},
+    )
+
+
+@pytest.mark.parametrize("fixture_name", ["spanning", "history_series"])
+def test_c16_passes_on_fixtures_with_live_enum_domained_columns(
+    base_fixtures: dict[str, Path], fixture_name: str
+) -> None:
+    """C16 passes where enum-domained columns carry only declared values."""
+    with open_emit(base_fixtures[fixture_name]) as emit:
+        result = run_check(emit, "C16")
+    assert result.passed, f"C16 failed: {result.messages}"
+    assert result.check == "C16"
+    assert result.skips == ()
+
+
+def test_c16_out_of_domain_fails_c16_alone(
+    base_fixtures: dict[str, Path],
+) -> None:
+    """One live out-of-domain value fails C16, names kind/property/value, and no other check."""
+    with open_emit(base_fixtures["c16_out_of_domain"]) as emit:
+        report = validate(emit)
+    failing = {r.check for r in report.results if not r.passed}
+    assert failing == {"C16"}
+    c16 = next(r for r in report.results if r.check == "C16")
+    assert len(c16.messages) == 1
+    message = c16.messages[0]
+    assert "actor" in message
+    assert "status" in message
+    assert "'archived'" in message
+
+
+def test_c16_declared_option_without_live_row_is_conformant(tmp_path: Path) -> None:
+    """A declared option with no live row passes; only live values outside it fail.
+
+    The table carries live rows for two of three declared options, so the pass
+    comes from inspecting real values, not from an empty table.
+    """
+    dest = _write_c16_emit(
+        tmp_path / "c16_unobserved_option",
+        enum_domains={
+            "actor": {"actor_type": enum_options("driver", "staff", "contractor")}
+        },
+    )
+    conn = duckdb.connect(str(dest / "run.duckdb"))
+    conn.execute(
+        "INSERT INTO records__actor (record_id, prop__actor_type) "
+        "VALUES ('a1', 'driver'), ('a2', 'staff')"
+    )
+    conn.close()
+    with open_emit(dest) as emit:
+        result = run_check(emit, "C16")
+    assert result.passed, result.messages
+    assert result.skips == ()
+
+
+def test_c16_skips_when_enum_domains_absent(tmp_path: Path) -> None:
+    """C16 passes by vacuity (skip) when enum_domains is absent."""
+    dest = _write_c16_emit(tmp_path / "c16_no_registry", enum_domains=None)
+    with open_emit(dest) as emit:
+        result = run_check(emit, "C16")
+    assert result.passed
+    assert any("enum_domains" in s and "absent" in s.lower() for s in result.skips)
+
+
+def test_c16_skips_registry_kind_without_records_table(tmp_path: Path) -> None:
+    """A registry kind with no records table in the emit is skipped, not failed."""
+    dest = _write_c16_emit(
+        tmp_path / "c16_kind_absent",
+        enum_domains={"doctor": {"specialty": enum_options("surgery")}},
+    )
+    with open_emit(dest) as emit:
+        result = run_check(emit, "C16")
+    assert result.passed
+    assert any("records__doctor" in s and "absent" in s for s in result.skips)
+
+
+def test_c16_skips_registry_property_without_column(tmp_path: Path) -> None:
+    """A registry property the records table does not carry is skipped, not failed."""
+    dest = _write_c16_emit(
+        tmp_path / "c16_column_absent",
+        enum_domains={"actor": {"shoe_size": enum_options("small", "large")}},
+    )
+    with open_emit(dest) as emit:
+        result = run_check(emit, "C16")
+    assert result.passed
+    assert any("prop__shoe_size" in s and "absent" in s for s in result.skips)

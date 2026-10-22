@@ -26,7 +26,13 @@ from pathlib import Path
 import duckdb
 import pytest
 from _support.notices import discard_notice_sink
-from _support.sidecar_builder import enum_options, identity_column, prop_column
+from _support.sidecar_builder import (
+    enum_options,
+    identity_column,
+    key_space,
+    partition_key,
+    prop_column,
+)
 from _support.sidecar_builder import write_emit as _write_emit_sidecar
 
 from exporters._emit_fixtures import _create_ddl, _table_spec
@@ -1458,12 +1464,7 @@ def test_output_deterministic_across_two_runs(tmp_path: Path) -> None:
 #: phase-3 demo's `patient`).
 _LOCATION_PRESENTATION_KEYS: dict[str, object] = {
     "location": {
-        "key": {
-            "unique_within": "branch",
-            "branch_stable": True,
-            "slice_stable": True,
-            "key_space": {"class": "record_index", "prefix": "", "width": 4},
-        }
+        "key": partition_key(key_space("record_index", prefix="", width=4, start=0))
     }
 }
 
@@ -1473,18 +1474,12 @@ _LOCATION_PRESENTATION_KEYS: dict[str, object] = {
 _ACTOR_PRESENTATION_KEYS_CLAIMED: dict[str, object] = {
     "actor": {
         "sub_types": {
-            "driver": {
-                "unique_within": "branch",
-                "branch_stable": True,
-                "slice_stable": True,
-                "key_space": {"class": "record_index", "prefix": "DRV_", "width": 4},
-            },
-            "bus": {
-                "unique_within": "branch",
-                "branch_stable": True,
-                "slice_stable": True,
-                "key_space": {"class": "record_index", "prefix": "BUS_", "width": 4},
-            },
+            "driver": partition_key(
+                key_space("record_index", prefix="DRV_", width=4, start=0)
+            ),
+            "bus": partition_key(
+                key_space("record_index", prefix="BUS_", width=4, start=0)
+            ),
         },
         "unique_within": "branch",
         "branch_stable": True,
@@ -1497,18 +1492,8 @@ _ACTOR_PRESENTATION_KEYS_CLAIMED: dict[str, object] = {
 _ACTOR_PRESENTATION_KEYS_UNCLAIMED: dict[str, object] = {
     "actor": {
         "sub_types": {
-            "driver": {
-                "unique_within": "emit",
-                "branch_stable": False,
-                "slice_stable": False,
-                "key_space": {"class": "counter", "prefix": "", "width": 3},
-            },
-            "bus": {
-                "unique_within": "emit",
-                "branch_stable": False,
-                "slice_stable": False,
-                "key_space": {"class": "counter", "prefix": "", "width": 3},
-            },
+            "driver": partition_key(key_space("counter", prefix="", width=3, start=1)),
+            "bus": partition_key(key_space("counter", prefix="", width=3, start=1)),
         },
         "branch_stable": False,
         "slice_stable": False,
@@ -1521,10 +1506,10 @@ _ACTOR_PRESENTATION_KEYS_UNCLAIMED: dict[str, object] = {
 _LOCATION_PRESENTATION_KEYS_INCOHERENT: dict[str, object] = {
     "location": {
         "key": {
+            **partition_key(key_space("counter", prefix="", width=3, start=1)),
             "unique_within": "branch",
             "branch_stable": True,
             "slice_stable": True,
-            "key_space": {"class": "counter", "prefix": "", "width": 3},
         }
     }
 }
@@ -1715,24 +1700,15 @@ def test_incoherent_block_init_fails(
 _ACTOR_PRESENTATION_KEYS_ALL_DECLARED: dict[str, object] = {
     "actor": {
         "sub_types": {
-            "driver": {
-                "unique_within": "branch",
-                "branch_stable": True,
-                "slice_stable": True,
-                "key_space": {"class": "record_index", "prefix": "DRV_", "width": 4},
-            },
-            "ride": {
-                "unique_within": "branch",
-                "branch_stable": True,
-                "slice_stable": True,
-                "key_space": {"class": "record_index", "prefix": "RID_", "width": 4},
-            },
-            "bus": {
-                "unique_within": "branch",
-                "branch_stable": True,
-                "slice_stable": True,
-                "key_space": {"class": "record_index", "prefix": "BUS_", "width": 4},
-            },
+            "driver": partition_key(
+                key_space("record_index", prefix="DRV_", width=4, start=0)
+            ),
+            "ride": partition_key(
+                key_space("record_index", prefix="RID_", width=4, start=0)
+            ),
+            "bus": partition_key(
+                key_space("record_index", prefix="BUS_", width=4, start=0)
+            ),
         },
         "unique_within": "branch",
         "branch_stable": True,

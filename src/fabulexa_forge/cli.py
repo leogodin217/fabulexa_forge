@@ -83,7 +83,7 @@ def _print_check_result(result: "CheckResult") -> None:
 
 
 def _run_validate(emit_dir_str: str) -> int:
-    """Open an emit and run conformance checks C1–C15, printing each result.
+    """Open an emit and run conformance checks C1–C16, printing each result.
 
     Args:
         emit_dir_str: Path string to the emit directory.
@@ -124,7 +124,7 @@ def _cmd_validate(args: list[str]) -> int:
 
     parser = argparse.ArgumentParser(
         prog="fabulexa-forge validate",
-        description="Run C1-C15 conformance checks against an emit.",
+        description="Run C1-C16 conformance checks against an emit.",
     )
     parser.add_argument("emit_dir", type=Path)
     parsed = parser.parse_args(args)
@@ -1385,7 +1385,7 @@ class Verb:
 
 
 VERBS: Final[tuple[Verb, ...]] = (
-    Verb("validate", "Run C1-C15 conformance checks against an emit.", _cmd_validate),
+    Verb("validate", "Run C1-C16 conformance checks against an emit.", _cmd_validate),
     Verb("export", "Run an export config against an emit.", _cmd_export),
     Verb(
         "init",

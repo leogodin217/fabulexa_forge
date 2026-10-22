@@ -53,23 +53,40 @@ jobs:
 
       # An empty manifest fails rather than fanning out to zero jobs and
       # passing vacuously.
+      # An empty catalog passes only when the manifest declares why
+      # (empty_reason — intentional emptiness, e.g. packs pending a rebuild);
+      # an unreasoned empty catalog stays a hard failure so the pass is
+      # never vacuous by accident.
       - name: Read the shipped manifest
         id: names
         run: |
-          names=$(uv run python -c "
+          uv run python - <<'EOF'
           import json
+          import os
+          import sys
+
           from fabulexa_forge.datasets.manifest import load_manifest
-          print(json.dumps([entry.name for entry in load_manifest().datasets]))
-          ")
-          if [ "$names" = "[]" ]; then
-            echo "::error::the shipped manifest lists no datasets"
-            exit 1
-          fi
-          echo "names=$names" >> "$GITHUB_OUTPUT"
+
+          manifest = load_manifest()
+          names = [entry.name for entry in manifest.datasets]
+          if not names:
+              if manifest.empty_reason is None:
+                  print(
+                      "::error::the shipped manifest lists no datasets "
+                      "and declares no empty_reason"
+                  )
+                  sys.exit(1)
+              print(f"::warning::no datasets to verify: {manifest.empty_reason}")
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as out:
+              out.write(f"names={json.dumps(names)}\n")
+          EOF
 
   dataset:
     name: ${{ matrix.name }}
     needs: manifest
+    # A declared-empty catalog emits names=[]; an empty matrix fails at job
+    # setup, so skip the fan-out entirely.
+    if: needs.manifest.outputs.names != '[]'
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false

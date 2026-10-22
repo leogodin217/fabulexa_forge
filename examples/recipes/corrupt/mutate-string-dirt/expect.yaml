@@ -4,6 +4,7 @@ defect_counts:
 
 impact_union:
   - C6
+  - C16
 
 contains_defects:
   - class: whitespace_pad
@@ -14,6 +15,6 @@ contains_defects:
 
   - class: truncated_value
     rule: truncate_status_value
-    impact: [C6]
+    impact: [C6, C16]
     location.table: records__actor
     location.column: prop__status

@@ -40,6 +40,8 @@ import duckdb
 from _support.sidecar_builder import (
     enum_options,
     identity_column,
+    key_space,
+    partition_key,
     prop_column,
     write_emit,
 )
@@ -168,18 +170,8 @@ _HISTORY_COLS: list[dict[str, object]] = [
 CREATURE_UNSAFE_REGISTRY: dict[str, object] = {
     "creature": {
         "sub_types": {
-            "cat": {
-                "unique_within": "emit",
-                "branch_stable": False,
-                "slice_stable": False,
-                "key_space": {"class": "counter", "prefix": "", "width": 3},
-            },
-            "dog": {
-                "unique_within": "emit",
-                "branch_stable": False,
-                "slice_stable": False,
-                "key_space": {"class": "counter", "prefix": "", "width": 3},
-            },
+            "cat": partition_key(key_space("counter", prefix="", width=3, start=1)),
+            "dog": partition_key(key_space("counter", prefix="", width=3, start=1)),
         },
         # unique_within omitted: both sub-types share an empty counter
         # prefix and are not pairwise union-safe.
@@ -191,14 +183,7 @@ CREATURE_UNSAFE_REGISTRY: dict[str, object] = {
 
 def _flat_presentation_key(prefix: str) -> dict[str, object]:
     """One flat-kind whole-column presentation_keys claim."""
-    return {
-        "key": {
-            "unique_within": "emit",
-            "branch_stable": False,
-            "slice_stable": False,
-            "key_space": {"class": "counter", "prefix": prefix, "width": 3},
-        }
-    }
+    return {"key": partition_key(key_space("counter", prefix=prefix, width=3, start=1))}
 
 
 #: The full registry every non-gate election test uses: widget/person/pet

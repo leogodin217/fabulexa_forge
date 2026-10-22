@@ -11,7 +11,12 @@ from typing import Literal
 import duckdb
 import pytest
 from _support.notices import RecordingNoticeSink, discard_notice_sink
-from _support.sidecar_builder import identity_column, write_emit
+from _support.sidecar_builder import (
+    identity_column,
+    key_space,
+    partition_key,
+    write_emit,
+)
 
 from exporters.base._base_fixtures import DAY_NS as _BASE_DAY_NS
 from exporters.base._base_fixtures import build_base_test_emit
@@ -1810,12 +1815,7 @@ _KEYED_PATIENT_COLUMNS: list[dict[str, object]] = [
 #: A flat kind's key claim: unique within the branch — a plain
 #: record_index-class declaration (mirrors the phase-3 demo's `patient`).
 _KEYED_PATIENT_PRESENTATION_KEYS: dict[str, object] = {
-    "key": {
-        "unique_within": "branch",
-        "branch_stable": True,
-        "slice_stable": True,
-        "key_space": {"class": "record_index", "prefix": "", "width": 4},
-    }
+    "key": partition_key(key_space("record_index", prefix="", width=4, start=1))
 }
 
 

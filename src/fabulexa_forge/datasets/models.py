@@ -89,9 +89,16 @@ class DatasetEntry(StrictBaseModel):
 
 
 class DatasetManifest(StrictBaseModel):
-    """The authored allowlist of published datasets, in authored order."""
+    """The authored allowlist of published datasets, in authored order.
+
+    `empty_reason` declares *intentional* emptiness: a one-line authored
+    reason the catalog ships with no datasets (e.g. packs pending a rebuild
+    at a new base format version). It is valid only while `datasets` is
+    empty — a populated manifest must not carry it.
+    """
 
     datasets: list[DatasetEntry]
+    empty_reason: str | None = None
 
     @model_validator(mode="after")
     def names_unique(self) -> Self:
@@ -102,4 +109,19 @@ class DatasetManifest(StrictBaseModel):
             if name in seen:
                 raise ValueError(f"duplicate dataset name: {name!r}")
             seen.add(name)
+        return self
+
+    @model_validator(mode="after")
+    def empty_reason_only_when_empty(self) -> Self:
+        """empty_reason is present only on an empty catalog, as a non-blank
+        single line; a populated manifest must omit it."""
+        if self.empty_reason is None:
+            return self
+        if self.datasets:
+            raise ValueError(
+                "empty_reason is only valid when datasets is empty; "
+                "a populated manifest must omit it"
+            )
+        if not self.empty_reason.strip() or "\n" in self.empty_reason:
+            raise ValueError("empty_reason must be a non-blank single line")
         return self

@@ -22,6 +22,8 @@ import duckdb
 from _support.sidecar_builder import (
     enum_options,
     identity_column,
+    key_space,
+    partition_key,
     prop_column,
     write_emit,
 )
@@ -394,12 +396,9 @@ def build_corrupted_presentation_id_patient_emit(tmp_path: Path) -> Path:
             },
             "presentation_keys": {
                 "patient": {
-                    "key": {
-                        "unique_within": "emit",
-                        "branch_stable": False,
-                        "slice_stable": False,
-                        "key_space": {"class": "counter", "prefix": "", "width": 4},
-                    }
+                    "key": partition_key(
+                        key_space("counter", prefix="", width=4, start=1)
+                    )
                 }
             },
         },
@@ -679,12 +678,9 @@ def build_corrupted_edge_target_emit(tmp_path: Path) -> Path:
             },
             "presentation_keys": {
                 "target": {
-                    "key": {
-                        "unique_within": "emit",
-                        "branch_stable": False,
-                        "slice_stable": False,
-                        "key_space": {"class": "counter", "prefix": "T_", "width": 3},
-                    }
+                    "key": partition_key(
+                        key_space("counter", prefix="T_", width=3, start=1)
+                    )
                 }
             },
         },
@@ -826,31 +822,18 @@ def build_base_keys_emit(tmp_path: Path) -> Path:
             "enum_domains": {"doctor": {"doctor_type": enum_options("a", "b")}},
             "presentation_keys": {
                 "patient": {
-                    "key": {
-                        "unique_within": "branch",
-                        "branch_stable": True,
-                        "slice_stable": True,
-                        "key_space": {
-                            "class": "record_index",
-                            "prefix": "",
-                            "width": 4,
-                        },
-                    }
+                    "key": partition_key(
+                        key_space("record_index", prefix="", width=4, start=1)
+                    )
                 },
                 "doctor": {
                     "sub_types": {
-                        "a": {
-                            "unique_within": "emit",
-                            "branch_stable": False,
-                            "slice_stable": False,
-                            "key_space": {"class": "counter", "prefix": "", "width": 3},
-                        },
-                        "b": {
-                            "unique_within": "emit",
-                            "branch_stable": False,
-                            "slice_stable": False,
-                            "key_space": {"class": "counter", "prefix": "", "width": 3},
-                        },
+                        "a": partition_key(
+                            key_space("counter", prefix="", width=3, start=1)
+                        ),
+                        "b": partition_key(
+                            key_space("counter", prefix="", width=3, start=1)
+                        ),
                     },
                     # unique_within omitted: both sub-types share an empty
                     # counter prefix and are not pairwise union-safe.
@@ -1058,16 +1041,9 @@ def build_mixed_edge_election_emit(
             "presentation_keys": {
                 "target": {
                     "sub_types": {
-                        "alpha": {
-                            "unique_within": "emit",
-                            "branch_stable": False,
-                            "slice_stable": False,
-                            "key_space": {
-                                "class": "counter",
-                                "prefix": "ALPHA_",
-                                "width": 3,
-                            },
-                        },
+                        "alpha": partition_key(
+                            key_space("counter", prefix="ALPHA_", width=3, start=1)
+                        ),
                     },
                     # A singleton declared set: the rollup equals alpha's own
                     # scalars (the union algebra over one entry).
