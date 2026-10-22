@@ -1,0 +1,77 @@
+sprint: base-format-v13
+parent_branch: contract-sync/v13-4762bc4b
+baseline_sha: 8c63c6e0122b63d0a9c07db6079bd11ea9331e26
+started: 2026-10-22
+current_phase: 1
+# The parent branch's test suite is red by design (contract synced, adoption
+# pending) — the baseline test gate was skipped at create time with the user's
+# explicit acknowledgment (--skip-baseline-tests). The pre-commit baseline gates.
+capabilities:
+  - reader-conformance: [version-gate, key-space-texture, four-param-union-safety, c16-domain-closure]
+  - key-election: [synthesized-space-texture]
+  - corrupters: [c16-impact-vocabulary, c16-cell-mutation-oracle, recipe-ground-truth-recuration]
+  - test-infrastructure: [key-claim-fixture-constructors]
+  - dataset-distribution: [empty-catalog-until-v13-packs]
+gates:
+  tests:
+    - "make test"
+phases:
+  1:
+    status: pending
+    name: "v13 compatibility — version gate, key-space texture, fixture authority"
+    demo: "docs/sprints/base-format-v13/demos/phase_1_v13_reader.py"
+    steps:
+      - kind: source
+        summary: "Bump the gate literal; KeySpace start/gaps through parse and four-param union_safe; synthesized election texture (record_index start=0, gaps=None); key_space/partition_key fixture constructors; empty the stale dataset catalog"
+      - kind: migrate
+        tactic: fan-out
+        change: "Digit-rendered key_space fixture entries now require prefix/width/start together (gaps optional); rebuild every hand-built presentation_keys key_space/partition_key dict through sidecar_builder's new key_space()/partition_key() constructors, intent preserved (a file whose presentation_keys usage is absence-only or inherited from a shared fixture module may need no edit — verify and report)"
+        files:
+          - "tests/exporters/base/_base_fixtures.py"
+          - "tests/exporters/base/test_election_plan.py"
+          - "tests/exporters/base/test_election_renders.py"
+          - "tests/exporters/base/test_plan.py"
+          - "tests/exporters/companion/_fixtures.py"
+          - "tests/exporters/dimensional/test_election_fk.py"
+          - "tests/exporters/dimensional/test_fk.py"
+          - "tests/exporters/dimensional/test_populations.py"
+          - "tests/exporters/source/_source_fixtures.py"
+          - "tests/exporters/source/test_election_plan.py"
+          - "tests/exporters/source/test_init.py"
+          - "tests/exporters/source/test_plan.py"
+          - "tests/exporters/streaming/_election_fixtures.py"
+          - "tests/exporters/streaming/test_election_stream.py"
+          - "tests/exporters/streaming/test_engine.py"
+          - "tests/exporters/streaming/test_init.py"
+          - "tests/exporters/streaming/test_presentation.py"
+          - "tests/exporters/streaming/test_selection.py"
+          - "tests/exporters/test_keys_init.py"
+          - "tests/incremental/test_driver.py"
+          - "tests/test_cli_init.py"
+      - kind: author
+        summary: "v13 texture parse/algebra tests (clause-f negatives, four-param rows), synthesized-space texture tests, fixture-constructor tests, empty-catalog dataset expectations"
+        files:
+          - "tests/reader/test_presentation_keys.py"
+          - "tests/exporters/test_election.py"
+          - "tests/_support/test_sidecar_builder.py"
+          - "tests/datasets/test_manifest.py"
+          - "tests/test_cli_datasets.py"
+  2:
+    status: pending
+    name: "C16 domain closure — check, impact oracle, ground truths"
+    demo: "docs/sprints/base-format-v13/demos/phase_2_c16_domain_closure.py"
+    steps:
+      - kind: source
+        summary: "C16 domain-closure check + registry + C-range prose; ImpactCode C16; enum_value_undeclared oracle wired into mutate_cells and duplicate_rows mutation impacts; engine gate prose; manifest vocabulary"
+      - kind: author
+        summary: "C16 conformance tests + out-of-domain negative fixture variant; C1..C16 order/CLI pins; corrupter C16 impact tests; re-curated corrupt recipe ground truths (mutate-out-of-domain, mutate-string-dirt gain C16)"
+        files:
+          - "tests/reader/_fixtures_build.py"
+          - "tests/reader/test_conformance_data.py"
+          - "tests/reader/test_conformance_structural.py"
+          - "tests/test_cli.py"
+          - "tests/corrupters/operations/test_mutate_cells.py"
+          - "tests/corrupters/operations/test_duplicate_rows.py"
+          - "tests/corrupters/test_agreement.py"
+          - "examples/recipes/corrupt/mutate-out-of-domain/expect.yaml"
+          - "examples/recipes/corrupt/mutate-string-dirt/expect.yaml"
