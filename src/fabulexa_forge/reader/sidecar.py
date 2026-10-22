@@ -706,18 +706,39 @@ def _discriminator_domain(
 
 
 @dataclass(frozen=True)
+class Gaps:
+    """A digit-rendered minting declaration's seeded-gap policy, verbatim from
+    the sidecar.
+
+    Present on a KeySpace iff the declaration declared a gap policy (contract
+    § The presentation_keys block); digit-rendered classes only. `rate` is the
+    per-step probability that a gap precedes the next value; `max` the largest
+    gap size. The parameters are declarations from one producer configuration,
+    not measurements — comparison in the union-safety algebra is exact
+    equality, no tolerance.
+    """
+
+    rate: float
+    max: int
+
+
+@dataclass(frozen=True)
 class KeySpace:
     """A minting declaration's key-space identity, verbatim from the sidecar.
 
     `space_class` carries the sidecar field `class` (a Python keyword).
-    `prefix` and `width` are present iff the class is digit-rendered
-    ('counter' / 'record_index') — the contract's presence rule, mirrored as
-    None-ness rather than sentinel values.
+    `prefix`, `width`, and `start` are present iff the class is digit-rendered
+    ('counter' / 'record_index'); `gaps` additionally requires the declaration
+    to have declared a gap policy — the contract's presence rules, mirrored as
+    None-ness rather than sentinel values. `start` is the base of the minted
+    series (the contract writes 1 when the declaration declared none).
     """
 
     space_class: Literal["counter", "record_index", "uuid", "record_id"]
     prefix: str | None
     width: int | None
+    start: int | None
+    gaps: Gaps | None
 
 
 @dataclass(frozen=True)
@@ -932,9 +953,12 @@ def union_safe(
     """Whether two key spaces of one kind are union-safe.
 
     The contract's normative pairwise algebra: a value collision must be
-    impossible given only the declarations. Kind-scoped — callers must not
-    pass entries of different kinds (the spaces make no cross-kind claim,
-    and the function cannot detect the misuse).
+    impossible given only the declarations. The `record_index` × `record_index`
+    row is affirmative only for identical `prefix`, `width`, `start`, and
+    `gaps` (exact equality; absent and declared gaps differ); texture never
+    rescues comparable prefixes, exactly as width never does. Kind-scoped —
+    callers must not pass entries of different kinds (the spaces make no
+    cross-kind claim, and the function cannot detect the misuse).
 
     Args:
         a: One declaration's key space.
@@ -942,14 +966,17 @@ def union_safe(
 
     Returns:
         True iff the pair is union-safe per the contract's table (shared
-        injective `record_index` space; independent `uuid` draws; verbatim
-        `record_id`; digit-rendered pairs with incomparable prefixes).
+        injective four-parameter `record_index` space; independent `uuid`
+        draws; verbatim `record_id`; digit-rendered pairs with incomparable
+        prefixes).
     """
     if (
         a.space_class == "record_index"
         and b.space_class == "record_index"
         and a.prefix == b.prefix
         and a.width == b.width
+        and a.start == b.start
+        and a.gaps == b.gaps
     ):
         return True
     if a.space_class == "uuid" and b.space_class == "uuid":
@@ -1018,6 +1045,44 @@ def combined_claim(
     )
 
 
+def _is_plain_int(value: object) -> bool:
+    """Whether `value` is an int that is not a bool."""
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
+def _parse_gaps(raw: object, context: str) -> Gaps:
+    """Parse and validate one `key_space.gaps` object (clause f).
+
+    Args:
+        raw: The raw `gaps` value.
+        context: A description of the enclosing entry, for error messages.
+
+    Returns:
+        The parsed Gaps, `rate` always a float.
+
+    Raises:
+        PresentationKeysInvalidError: `raw` is not an object carrying exactly
+            `rate` (a non-bool number) and `max` (a non-bool integer).
+    """
+    if not isinstance(raw, Mapping) or set(raw) != {"rate", "max"}:
+        raise PresentationKeysInvalidError(
+            f"{context}: key_space.gaps must be an object carrying exactly "
+            "rate and max (clause: key-space shape)"
+        )
+    rate_raw = raw["rate"]
+    max_raw = raw["max"]
+    if (
+        not isinstance(rate_raw, (int, float))
+        or isinstance(rate_raw, bool)
+        or not _is_plain_int(max_raw)
+    ):
+        raise PresentationKeysInvalidError(
+            f"{context}: key_space.gaps.rate/max must be a number/integer "
+            "(clause: key-space shape)"
+        )
+    return Gaps(rate=float(rate_raw), max=cast(int, max_raw))
+
+
 def _parse_key_space(raw: object, context: str) -> KeySpace:
     """Parse and validate one `key_space` object (clause f: key-space shape).
 
@@ -1030,8 +1095,10 @@ def _parse_key_space(raw: object, context: str) -> KeySpace:
 
     Raises:
         PresentationKeysInvalidError: `raw` is not an object, `class` is
-            outside the four-member enum, or `prefix`/`width` presence
-            disagrees with whether `class` is digit-rendered.
+            outside the four-member enum, `prefix`/`width`/`start` presence
+            disagrees with whether `class` is digit-rendered, `start` is not a
+            non-negative integer, or `gaps` is present on a non-digit-rendered
+            class or malformed.
     """
     if not isinstance(raw, Mapping):
         raise PresentationKeysInvalidError(
@@ -1047,27 +1114,44 @@ def _parse_key_space(raw: object, context: str) -> KeySpace:
         Literal["counter", "record_index", "uuid", "record_id"], space_class_raw
     )
     digit_rendered = space_class in _DIGIT_RENDERED_CLASSES
-    prefix_present = "prefix" in raw
-    width_present = "width" in raw
-    if digit_rendered != prefix_present or digit_rendered != width_present:
+    if any(
+        digit_rendered != (member in raw) for member in ("prefix", "width", "start")
+    ):
         raise PresentationKeysInvalidError(
-            f"{context}: key_space.class {space_class!r} prefix/width presence "
-            f"must match digit-rendered={digit_rendered} (clause: key-space shape)"
+            f"{context}: key_space.class {space_class!r} prefix/width/start "
+            f"presence must match digit-rendered={digit_rendered} "
+            "(clause: key-space shape)"
         )
     if not digit_rendered:
-        return KeySpace(space_class=space_class, prefix=None, width=None)
+        if "gaps" in raw:
+            raise PresentationKeysInvalidError(
+                f"{context}: key_space.class {space_class!r} must not carry "
+                "gaps (clause: key-space shape)"
+            )
+        return KeySpace(
+            space_class=space_class, prefix=None, width=None, start=None, gaps=None
+        )
     prefix_raw = raw.get("prefix")
     width_raw = raw.get("width")
-    if (
-        not isinstance(prefix_raw, str)
-        or not isinstance(width_raw, int)
-        or isinstance(width_raw, bool)
-    ):
+    start_raw = raw.get("start")
+    if not isinstance(prefix_raw, str) or not _is_plain_int(width_raw):
         raise PresentationKeysInvalidError(
             f"{context}: key_space.prefix/width must be a string/integer "
             "(clause: key-space shape)"
         )
-    return KeySpace(space_class=space_class, prefix=prefix_raw, width=width_raw)
+    if not _is_plain_int(start_raw) or cast(int, start_raw) < 0:
+        raise PresentationKeysInvalidError(
+            f"{context}: key_space.start must be a non-negative integer "
+            "(clause: key-space shape)"
+        )
+    gaps = _parse_gaps(raw["gaps"], context) if "gaps" in raw else None
+    return KeySpace(
+        space_class=space_class,
+        prefix=prefix_raw,
+        width=cast(int, width_raw),
+        start=cast(int, start_raw),
+        gaps=gaps,
+    )
 
 
 def _parse_partition_key(raw: object, context: str) -> PartitionKey:

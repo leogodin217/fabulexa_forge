@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import pytest
 from _support.notices import discard_notice_sink
-from _support.sidecar_builder import enum_options
+from _support.sidecar_builder import enum_options, key_space, partition_key
 
 from fabulexa_forge import SUPPORTED_BASE_FORMAT_VERSION
 from fabulexa_forge.config.models import BaseConfig, ExcludeDecl, RenameEntry
@@ -119,12 +119,7 @@ def _sidecar(
 
 def _raw_counter_key(prefix: str = "", width: int = 3) -> dict[str, object]:
     """A conformant counter-class raw partition_key (emit/false/false)."""
-    return {
-        "unique_within": "emit",
-        "branch_stable": False,
-        "slice_stable": False,
-        "key_space": {"class": "counter", "prefix": prefix, "width": width},
-    }
+    return partition_key(key_space("counter", prefix=prefix, width=width, start=1))
 
 
 def _flat_ward_sidecar(presentation_keys: dict[str, object] | None = None) -> Sidecar:

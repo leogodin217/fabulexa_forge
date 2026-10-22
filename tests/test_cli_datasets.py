@@ -1,7 +1,7 @@
 """Tests for the `fabulexa-forge datasets` verb (list, get).
 
 Covers:
-- `datasets list` against the shipped manifest: text and json, exit 0
+- `datasets list` against the shipped (empty) manifest: text and json, exit 0
 - `datasets list` performs no network I/O (the transport seam is never called)
 - Bare `datasets` / unknown sub-verb: argparse usage error, exit 2
 - `datasets --help` / `-h`: usage on stdout, exit 0
@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import hashlib
 import io
-import json
 import tarfile
 from pathlib import Path
 from typing import BinaryIO
@@ -61,41 +60,27 @@ def _make_entry(archive_bytes: bytes) -> DatasetEntry:
     )
 
 
-_SHIPPED_NAMES = [
-    "nhs",
-    "retail",
-    "saas-billing",
-    "ride-sharing",
-    "ride-sharing-marketplace",
-    "security-logs",
-]
-
-
-def test_datasets_list_text_shipped_catalog_stdout_only_exit_zero(
+def test_datasets_list_text_empty_catalog_renders_no_datasets_line(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """`datasets list` renders every shipped entry, in authored order, to stdout."""
+    """`datasets list` against the shipped (empty) catalog renders the
+    no-datasets line to stdout."""
     exit_code = main(["datasets", "list"])
     captured = capsys.readouterr()
     assert exit_code == 0
-    listed = [
-        line.split(" ", 1)[0]
-        for line in captured.out.splitlines()
-        if line and not line.startswith(" ")
-    ]
-    assert listed == _SHIPPED_NAMES
+    assert captured.out == "no datasets published for this version\n"
     assert captured.err == ""
 
 
-def test_datasets_list_json_shipped_catalog(
+def test_datasets_list_json_empty_catalog(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """`datasets list --format json` renders the shipped manifest document."""
+    """`datasets list --format json` against the shipped (empty) catalog renders
+    exactly {"datasets":[]}."""
     exit_code = main(["datasets", "list", "--format", "json"])
     captured = capsys.readouterr()
     assert exit_code == 0
-    document = json.loads(captured.out)
-    assert [entry["name"] for entry in document["datasets"]] == _SHIPPED_NAMES
+    assert captured.out.strip() == '{"datasets":[]}'
     assert captured.err == ""
 
 

@@ -21,6 +21,8 @@ from _support.notices import RecordingNoticeSink, discard_notice_sink
 from _support.sidecar_builder import (
     enum_options,
     identity_column,
+    key_space,
+    partition_key,
     prop_column,
     write_emit,
 )
@@ -258,12 +260,7 @@ def build_partial_presentation_claim_emit(tmp_path: Path) -> Path:
     }
 
     def _counter_partition(prefix: str) -> dict[str, object]:
-        return {
-            "unique_within": "emit",
-            "branch_stable": False,
-            "slice_stable": False,
-            "key_space": {"class": "counter", "prefix": prefix, "width": 3},
-        }
+        return partition_key(key_space("counter", prefix=prefix, width=3, start=1))
 
     extra = {
         "enum_domains": {"gizmo": {"gizmo_type": enum_options("a", "b", "c")}},

@@ -53,12 +53,20 @@ from fabulexa_forge.reader.sidecar import KeySpace, union_safe
 #: The synthesized key-space identity of the built-in `record_id` surface —
 #: the contract's `record_id` class, forge-synthesized rather than
 #: registry-declared (doc § The election grammar).
-_RECORD_ID_KEY_SPACE = KeySpace(space_class="record_id", prefix=None, width=None)
+_RECORD_ID_KEY_SPACE = KeySpace(
+    space_class="record_id", prefix=None, width=None, start=None, gaps=None
+)
 
 #: The synthesized key-space identity of the built-in `record_index` surface —
 #: the contract's `record_index` class with the empty prefix, incomparable
-#: with any non-empty non-digit prefix.
-_RECORD_INDEX_KEY_SPACE = KeySpace(space_class="record_index", prefix="", width=0)
+#: with any non-empty non-digit prefix. Its texture is the truthful one of the
+#: raw 0-based dense index rendered verbatim (`f(i) = i`: start 0, no gaps), so
+#: a registry `record_index` declaration at the contract's undeclared-default
+#: `start: 1` is deliberately not union-safe beside it: raw index 1 and a
+#: start-1 rendering of index 0 both read "1".
+_RECORD_INDEX_KEY_SPACE = KeySpace(
+    space_class="record_index", prefix="", width=0, start=0, gaps=None
+)
 
 
 @dataclass(frozen=True)

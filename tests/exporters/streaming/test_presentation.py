@@ -21,7 +21,7 @@ from typing import Any
 import duckdb
 import pytest
 from _support.notices import discard_notice_sink
-from _support.sidecar_builder import identity_column
+from _support.sidecar_builder import identity_column, key_space, partition_key
 from _support.sidecar_builder import write_emit as _write_sidecar
 
 from fabulexa_forge.config.models import (
@@ -923,16 +923,9 @@ class TestDebeziumSchemaMatchesResolver:
             extra={
                 "presentation_keys": {
                     "item": {
-                        "key": {
-                            "unique_within": "emit",
-                            "branch_stable": False,
-                            "slice_stable": False,
-                            "key_space": {
-                                "class": "counter",
-                                "prefix": "I_",
-                                "width": 3,
-                            },
-                        }
+                        "key": partition_key(
+                            key_space("counter", prefix="I_", width=3, start=1)
+                        )
                     }
                 }
             },

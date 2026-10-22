@@ -44,6 +44,8 @@ from _support.notices import RecordingNoticeSink, discard_notice_sink
 from _support.sidecar_builder import (
     enum_options,
     identity_column,
+    key_space,
+    partition_key,
     prop_column,
     write_emit,
 )
@@ -594,18 +596,12 @@ def _build_subtyped_actor_emit(
 _ACTOR_PARTIAL_KEYS: dict[str, object] = {
     "actor": {
         "sub_types": {
-            "driver": {
-                "unique_within": "branch",
-                "branch_stable": True,
-                "slice_stable": True,
-                "key_space": {"class": "record_index", "prefix": "DRV_", "width": 4},
-            },
-            "bus": {
-                "unique_within": "branch",
-                "branch_stable": True,
-                "slice_stable": True,
-                "key_space": {"class": "record_index", "prefix": "BUS_", "width": 4},
-            },
+            "driver": partition_key(
+                key_space("record_index", prefix="DRV_", width=4, start=0)
+            ),
+            "bus": partition_key(
+                key_space("record_index", prefix="BUS_", width=4, start=0)
+            ),
         },
         "unique_within": "branch",
         "branch_stable": True,
@@ -668,18 +664,8 @@ _ORDER_REFERENCING_ACTOR_COLUMNS: list[dict[str, object]] = [
 _ACTOR_BARE_COUNTER_KEYS: dict[str, object] = {
     "actor": {
         "sub_types": {
-            "driver": {
-                "unique_within": "emit",
-                "branch_stable": False,
-                "slice_stable": False,
-                "key_space": {"class": "counter", "prefix": "", "width": 3},
-            },
-            "bus": {
-                "unique_within": "emit",
-                "branch_stable": False,
-                "slice_stable": False,
-                "key_space": {"class": "counter", "prefix": "", "width": 3},
-            },
+            "driver": partition_key(key_space("counter", prefix="", width=3, start=1)),
+            "bus": partition_key(key_space("counter", prefix="", width=3, start=1)),
         },
         "branch_stable": False,
         "slice_stable": False,
@@ -756,18 +742,12 @@ def test_referencing_column_proposes_clean_no_degradation(tmp_path: Path) -> Non
 _ACTOR_FULL_KEYS: dict[str, object] = {
     "actor": {
         "sub_types": {
-            "driver": {
-                "unique_within": "branch",
-                "branch_stable": True,
-                "slice_stable": True,
-                "key_space": {"class": "record_index", "prefix": "DRV_", "width": 4},
-            },
-            "bus": {
-                "unique_within": "branch",
-                "branch_stable": True,
-                "slice_stable": True,
-                "key_space": {"class": "record_index", "prefix": "BUS_", "width": 4},
-            },
+            "driver": partition_key(
+                key_space("record_index", prefix="DRV_", width=4, start=0)
+            ),
+            "bus": partition_key(
+                key_space("record_index", prefix="BUS_", width=4, start=0)
+            ),
         },
         "unique_within": "branch",
         "branch_stable": True,
@@ -1017,12 +997,12 @@ def test_emit_predating_history_tracked_raises(tmp_path: Path) -> None:
 _LOCATION_KEYS_INCOHERENT: dict[str, object] = {
     "widget": {
         "key": {
+            **partition_key(key_space("counter", prefix="", width=3, start=1)),
+            # 'counter' expects unique_within='emit', branch_stable=False,
+            # slice_stable=False — disagrees with the declared scalars.
             "unique_within": "branch",
             "branch_stable": True,
             "slice_stable": True,
-            # 'counter' expects unique_within='emit', branch_stable=False,
-            # slice_stable=False — disagrees with the declared scalars.
-            "key_space": {"class": "counter", "prefix": "", "width": 3},
         }
     }
 }

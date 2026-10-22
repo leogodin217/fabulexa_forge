@@ -12,7 +12,13 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 import duckdb
-from _support.sidecar_builder import identity_column, prop_column, write_emit
+from _support.sidecar_builder import (
+    identity_column,
+    key_space,
+    partition_key,
+    prop_column,
+    write_emit,
+)
 
 from fabulexa_forge.exporters.query_spec import (
     ColumnProvenance,
@@ -181,16 +187,7 @@ def write_documented_emit(dest: "Path", *, documented: bool = True) -> None:
         # Structural coherence, not documentation: a records table carrying
         # presentation_id must have a presentation_keys entry, documented
         # or not.
-        "presentation_keys": {
-            "actor": {
-                "key": {
-                    "unique_within": "branch",
-                    "branch_stable": True,
-                    "slice_stable": True,
-                    "key_space": {"class": "uuid"},
-                }
-            }
-        },
+        "presentation_keys": {"actor": {"key": partition_key(key_space("uuid"))}},
     }
     if documented:
         extra["scenario_description"] = SCENARIO_DESCRIPTION

@@ -27,6 +27,8 @@ from _support.notices import discard_notice_sink
 from _support.sidecar_builder import (
     enum_options,
     identity_column,
+    key_space,
+    partition_key,
     prop_column,
     write_emit,
 )
@@ -173,12 +175,9 @@ _HISTORY_COLUMNS: list[dict[str, object]] = [
 _ALPHA_ONLY_PRESENTATION_KEYS: dict[str, object] = {
     "entity": {
         "sub_types": {
-            "alpha": {
-                "unique_within": "emit",
-                "branch_stable": False,
-                "slice_stable": False,
-                "key_space": {"class": "counter", "prefix": "ALPHA_", "width": 3},
-            }
+            "alpha": partition_key(
+                key_space("counter", prefix="ALPHA_", width=3, start=1)
+            )
         },
         "unique_within": "emit",
         "branch_stable": False,
@@ -781,18 +780,8 @@ def test_combined_mixed_election_dim_legal_with_every_inbound_edge_explicit(
 _UNSAFE_PRESENTATION_KEYS: dict[str, object] = {
     "entity": {
         "sub_types": {
-            "alpha": {
-                "unique_within": "emit",
-                "branch_stable": False,
-                "slice_stable": False,
-                "key_space": {"class": "counter", "prefix": "", "width": 3},
-            },
-            "beta": {
-                "unique_within": "emit",
-                "branch_stable": False,
-                "slice_stable": False,
-                "key_space": {"class": "counter", "prefix": "", "width": 3},
-            },
+            "alpha": partition_key(key_space("counter", prefix="", width=3, start=1)),
+            "beta": partition_key(key_space("counter", prefix="", width=3, start=1)),
         },
         # No unique_within at the rollup: the two bare-prefix (comparable)
         # counter spaces are union-unsafe, so the combined-claim algebra
@@ -948,12 +937,9 @@ _PIT_HOLDER_COLUMNS: list[dict[str, object]] = [
 _OWNER_ALPHA_ONLY_PRESENTATION_KEYS: dict[str, object] = {
     "owner": {
         "sub_types": {
-            "alpha": {
-                "unique_within": "emit",
-                "branch_stable": False,
-                "slice_stable": False,
-                "key_space": {"class": "counter", "prefix": "OWN_", "width": 3},
-            }
+            "alpha": partition_key(
+                key_space("counter", prefix="OWN_", width=3, start=1)
+            )
         },
         "unique_within": "emit",
         "branch_stable": False,
@@ -1138,18 +1124,12 @@ def _dim_entity_owner(
 _GUARD_PRESENTATION_KEYS: dict[str, object] = {
     "entity": {
         "sub_types": {
-            "alpha": {
-                "unique_within": "emit",
-                "branch_stable": False,
-                "slice_stable": False,
-                "key_space": {"class": "counter", "prefix": "ALPHA_", "width": 3},
-            },
-            "beta": {
-                "unique_within": "emit",
-                "branch_stable": False,
-                "slice_stable": False,
-                "key_space": {"class": "counter", "prefix": "BETA_", "width": 3},
-            },
+            "alpha": partition_key(
+                key_space("counter", prefix="ALPHA_", width=3, start=1)
+            ),
+            "beta": partition_key(
+                key_space("counter", prefix="BETA_", width=3, start=1)
+            ),
         },
         "unique_within": "emit",
         "branch_stable": False,

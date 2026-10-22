@@ -39,17 +39,18 @@ ENTRY_TWO = DatasetEntry.model_validate(
 )
 
 
-def test_load_manifest_returns_shipped_catalog() -> None:
-    """load_manifest() returns the shipped catalog, offline, in authored order."""
-    manifest = load_manifest()
-    assert [entry.name for entry in manifest.datasets] == [
-        "nhs",
-        "retail",
-        "saas-billing",
-        "ride-sharing",
-        "ride-sharing-marketplace",
-        "security-logs",
-    ]
+def test_load_manifest_returns_empty_catalog() -> None:
+    """load_manifest() returns the shipped catalog, offline: empty until packs are
+    rebuilt at the supported version."""
+    assert load_manifest().datasets == []
+
+
+def test_render_of_shipped_catalog_is_no_datasets_line() -> None:
+    """The shipped (empty) catalog renders the no-datasets line."""
+    assert (
+        render_dataset_listing(load_manifest(), "text")
+        == "no datasets published for this version"
+    )
 
 
 def test_text_render_of_empty_manifest_is_no_datasets_line() -> None:

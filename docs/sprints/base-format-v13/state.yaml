@@ -2,7 +2,7 @@ sprint: base-format-v13
 parent_branch: contract-sync/v13-4762bc4b
 baseline_sha: 8c63c6e0122b63d0a9c07db6079bd11ea9331e26
 started: 2026-10-22
-current_phase: 1
+current_phase: 2
 # The parent branch's test suite is red by design (contract synced, adoption
 # pending) — the baseline test gate was skipped at create time with the user's
 # explicit acknowledgment (--skip-baseline-tests). The pre-commit baseline gates.
@@ -17,7 +17,7 @@ gates:
     - "make test"
 phases:
   1:
-    status: pending
+    status: complete
     name: "v13 compatibility — version gate, key-space texture, fixture authority"
     demo: "docs/sprints/base-format-v13/demos/phase_1_v13_reader.py"
     steps:

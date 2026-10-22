@@ -180,6 +180,100 @@ def enum_options(*values: str) -> list[dict[str, object]]:
     return [{"value": value} for value in values]
 
 
+_DIGIT_RENDERED_CLASSES = frozenset({"counter", "record_index"})
+"""The key-space classes that render digits (prefix/width/start participate)."""
+
+
+def key_space(
+    space_class: "Literal['counter', 'record_index', 'uuid', 'record_id']",
+    *,
+    prefix: str | None = None,
+    width: int | None = None,
+    start: int | None = None,
+    gaps: tuple[float, int] | None = None,
+) -> dict[str, object]:
+    """Build one conformant key_space object for a fixture sidecar.
+
+    The sole constructor for a key-space entry across every fixture builder —
+    the one place the test tree knows the contract's presence rules. A
+    digit-rendered class ('counter' / 'record_index') requires prefix, width,
+    AND start together (the contract's uniform-participation rule, required
+    explicitly like prop_column's temporal pair — no silent default start);
+    gaps is optional and digit-rendered-only, rendered as
+    {"rate": gaps[0], "max": gaps[1]}. A non-digit-rendered class requires all
+    four absent. A shape-defective negative fixture mutates the returned dict;
+    a defect is never expressible through the constructor.
+
+    Args:
+        space_class: The key-space identity class.
+        prefix: Rendering prefix; required iff digit-rendered.
+        width: Zero-pad width; required iff digit-rendered.
+        start: Base of the minted series; required iff digit-rendered.
+        gaps: The declared (rate, max) gap policy; optional, digit-rendered only.
+
+    Returns:
+        The key_space dict for a partition_key entry.
+
+    Raises:
+        ValueError: A digit-rendered class missing any of prefix/width/start,
+            a non-digit-rendered class given any of them, or gaps on a
+            non-digit-rendered class.
+    """
+    texture = {"prefix": prefix, "width": width, "start": start}
+    result: dict[str, object] = {"class": space_class}
+    if space_class in _DIGIT_RENDERED_CLASSES:
+        missing = [name for name, value in texture.items() if value is None]
+        if missing:
+            raise ValueError(
+                f"key_space {space_class!r}: digit-rendered class requires "
+                f"{', '.join(missing)}"
+            )
+        result.update(texture)
+        if gaps is not None:
+            result["gaps"] = {"rate": gaps[0], "max": gaps[1]}
+        return result
+    given = [name for name, value in texture.items() if value is not None]
+    if gaps is not None:
+        given.append("gaps")
+    if given:
+        raise ValueError(
+            f"key_space {space_class!r}: non-digit-rendered class must not "
+            f"carry {', '.join(given)}"
+        )
+    return result
+
+
+def partition_key(key_space: dict[str, object]) -> dict[str, object]:
+    """Build one conformant partition_key entry from its key space.
+
+    Derives the three key-claim scalars from key_space["class"] — the contract
+    fully determines them ('counter' -> emit/False/False; every other class ->
+    branch/True/True) — so a fixture can never state the scalar-key-space
+    coupling wrong (clause e is unexpressible through the constructor; negative
+    variants mutate the returned dict).
+
+    Args:
+        key_space: A key_space dict, from the `key_space` constructor.
+
+    Returns:
+        {"unique_within": ..., "branch_stable": ..., "slice_stable": ...,
+         "key_space": key_space}.
+
+    Raises:
+        ValueError: key_space carries no recognized "class".
+    """
+    space_class = key_space.get("class")
+    if space_class not in ("counter", "record_index", "uuid", "record_id"):
+        raise ValueError(f"partition_key: unrecognized key_space class {space_class!r}")
+    stable = space_class != "counter"
+    return {
+        "unique_within": "branch" if stable else "emit",
+        "branch_stable": stable,
+        "slice_stable": stable,
+        "key_space": key_space,
+    }
+
+
 def _column_spec_from_raw(raw: dict[str, object]) -> ColumnSpec:
     """Build a `ColumnSpec` from one raw fixture column dict.
 

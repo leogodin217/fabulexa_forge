@@ -16,6 +16,7 @@ from pathlib import Path
 
 import pytest
 from _support.notices import discard_notice_sink
+from _support.sidecar_builder import key_space, partition_key
 
 from fabulexa_forge.config.models import BaseConfig, ExcludeDecl, ExportConfig
 from fabulexa_forge.derivations.guard import require_single_branch
@@ -42,24 +43,12 @@ from ._base_fixtures import (
 _MID_TAPE_HORIZON = 2 * DAY_NS + 1
 
 _PATIENT_PRESENTATION_KEYS: dict[str, object] = {
-    "patient": {
-        "key": {
-            "unique_within": "emit",
-            "branch_stable": False,
-            "slice_stable": False,
-            "key_space": {"class": "counter", "prefix": "", "width": 4},
-        }
-    }
+    "patient": {"key": partition_key(key_space("counter", prefix="", width=4, start=1))}
 }
 
 _TARGET_PRESENTATION_KEYS: dict[str, object] = {
     "target": {
-        "key": {
-            "unique_within": "emit",
-            "branch_stable": False,
-            "slice_stable": False,
-            "key_space": {"class": "counter", "prefix": "T_", "width": 3},
-        }
+        "key": partition_key(key_space("counter", prefix="T_", width=3, start=1))
     }
 }
 
