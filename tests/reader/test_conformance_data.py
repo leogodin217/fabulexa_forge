@@ -2328,11 +2328,23 @@ def test_c16_out_of_domain_fails_c16_alone(
 
 
 def test_c16_declared_option_without_live_row_is_conformant(tmp_path: Path) -> None:
-    """A declared option with no live row passes; only live values outside it fail."""
+    """A declared option with no live row passes; only live values outside it fail.
+
+    The table carries live rows for two of three declared options, so the pass
+    comes from inspecting real values, not from an empty table.
+    """
     dest = _write_c16_emit(
         tmp_path / "c16_unobserved_option",
-        enum_domains={"actor": {"actor_type": enum_options("driver", "staff")}},
+        enum_domains={
+            "actor": {"actor_type": enum_options("driver", "staff", "contractor")}
+        },
     )
+    conn = duckdb.connect(str(dest / "run.duckdb"))
+    conn.execute(
+        "INSERT INTO records__actor (record_id, prop__actor_type) "
+        "VALUES ('a1', 'driver'), ('a2', 'staff')"
+    )
+    conn.close()
     with open_emit(dest) as emit:
         result = run_check(emit, "C16")
     assert result.passed, result.messages

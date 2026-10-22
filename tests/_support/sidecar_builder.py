@@ -10,7 +10,7 @@ expose (a ValueError at construction, never a silently-written defect).
 from __future__ import annotations
 
 import json
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 import jsonschema
 
@@ -22,7 +22,6 @@ from fabulexa_forge.reader.sidecar import ColumnSpec
 
 if TYPE_CHECKING:
     from pathlib import Path
-    from typing import Literal
 
     from fabulexa_forge.reader import TemporalClass
 
@@ -180,12 +179,15 @@ def enum_options(*values: str) -> list[dict[str, object]]:
     return [{"value": value} for value in values]
 
 
+KeySpaceClass = Literal["counter", "record_index", "uuid", "record_id"]
+"""The contract's key-space identity classes."""
+
 _DIGIT_RENDERED_CLASSES = frozenset({"counter", "record_index"})
 """The key-space classes that render digits (prefix/width/start participate)."""
 
 
 def key_space(
-    space_class: "Literal['counter', 'record_index', 'uuid', 'record_id']",
+    space_class: KeySpaceClass,
     *,
     prefix: str | None = None,
     width: int | None = None,

@@ -10,6 +10,8 @@ coherence defect a test targets.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import pytest
 from _support.sidecar_builder import enum_options, key_space, partition_key
 
@@ -24,6 +26,9 @@ from fabulexa_forge.reader.sidecar import (
     combined_claim,
     union_safe,
 )
+
+if TYPE_CHECKING:
+    from _support.sidecar_builder import KeySpaceClass
 
 # ---------------------------------------------------------------------------
 # Raw-dict helpers (sidecar JSON shape, for Sidecar.from_raw fixtures)
@@ -127,7 +132,7 @@ def _ward_sidecar_with_key_space(space: dict[str, object]) -> Sidecar:
 
 
 def _ks(
-    space_class: str,
+    space_class: KeySpaceClass,
     *,
     prefix: str | None = None,
     width: int | None = None,
@@ -135,7 +140,7 @@ def _ks(
     gaps: Gaps | None = None,
 ) -> KeySpace:
     return KeySpace(
-        space_class=space_class,  # type: ignore[arg-type]
+        space_class=space_class,
         prefix=prefix,
         width=width,
         start=start,
@@ -491,9 +496,9 @@ def test_clause_f_start_not_a_non_negative_integer(start: object) -> None:
 
 
 @pytest.mark.parametrize("space_class", ["uuid", "record_id"])
-def test_clause_f_gaps_on_non_digit_rendered_class(space_class: str) -> None:
+def test_clause_f_gaps_on_non_digit_rendered_class(space_class: KeySpaceClass) -> None:
     """(f) `gaps` on a non-digit-rendered class."""
-    space = _with(key_space(space_class), gaps={"rate": 0.1, "max": 3})  # type: ignore[arg-type]
+    space = _with(key_space(space_class), gaps={"rate": 0.1, "max": 3})
     with pytest.raises(PresentationKeysInvalidError, match="ward.*must not carry gaps"):
         _ward_sidecar_with_key_space(space).presentation_keys()
 
@@ -594,9 +599,11 @@ def test_key_space_int_valued_gaps_rate_is_coerced_to_float() -> None:
 
 
 @pytest.mark.parametrize("space_class", ["uuid", "record_id"])
-def test_key_space_non_digit_rendered_carries_no_texture(space_class: str) -> None:
+def test_key_space_non_digit_rendered_carries_no_texture(
+    space_class: KeySpaceClass,
+) -> None:
     """A non-digit-rendered entry with no texture parses to all-None texture."""
-    parsed = _parsed_key_space(key_space(space_class))  # type: ignore[arg-type]
+    parsed = _parsed_key_space(key_space(space_class))
     assert (parsed.prefix, parsed.width, parsed.start, parsed.gaps) == (
         None,
         None,

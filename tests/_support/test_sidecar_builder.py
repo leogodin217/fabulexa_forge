@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import TYPE_CHECKING, Any
 
 import pytest
 
@@ -17,6 +18,9 @@ from _support.sidecar_builder import (
     write_emit,
 )
 from fabulexa_forge import SUPPORTED_BASE_FORMAT_VERSION
+
+if TYPE_CHECKING:
+    from _support.sidecar_builder import KeySpaceClass
 
 _FIRINGS_TABLE: dict[str, object] = {
     "name": "firings",
@@ -178,21 +182,21 @@ def test_key_space_digit_rendered_with_gaps() -> None:
 
 
 @pytest.mark.parametrize("space_class", ["uuid", "record_id"])
-def test_key_space_non_digit_rendered_is_class_only(space_class: str) -> None:
+def test_key_space_non_digit_rendered_is_class_only(space_class: KeySpaceClass) -> None:
     """A non-digit-rendered class renders as {"class": ...} alone."""
-    assert key_space(space_class) == {"class": space_class}  # type: ignore[arg-type]
+    assert key_space(space_class) == {"class": space_class}
 
 
 @pytest.mark.parametrize("space_class", ["counter", "record_index"])
 @pytest.mark.parametrize("missing", ["prefix", "width", "start"])
 def test_key_space_digit_rendered_missing_texture_member_raises(
-    space_class: str, missing: str
+    space_class: KeySpaceClass, missing: str
 ) -> None:
     """A digit-rendered class missing any of prefix/width/start raises, naming it."""
-    texture: dict[str, object] = {"prefix": "P_", "width": 3, "start": 1}
+    texture: dict[str, Any] = {"prefix": "P_", "width": 3, "start": 1}
     del texture[missing]
     with pytest.raises(ValueError, match=missing):
-        key_space(space_class, **texture)  # type: ignore[arg-type]
+        key_space(space_class, **texture)
 
 
 @pytest.mark.parametrize("space_class", ["uuid", "record_id"])
@@ -207,11 +211,11 @@ def test_key_space_digit_rendered_missing_texture_member_raises(
     ids=["prefix", "width", "start", "gaps"],
 )
 def test_key_space_non_digit_rendered_with_texture_raises(
-    space_class: str, texture: dict[str, object]
+    space_class: KeySpaceClass, texture: dict[str, Any]
 ) -> None:
     """A non-digit-rendered class given any texture member raises, naming it."""
     with pytest.raises(ValueError, match=next(iter(texture))):
-        key_space(space_class, **texture)  # type: ignore[arg-type]
+        key_space(space_class, **texture)
 
 
 def test_partition_key_counter_derives_emit_unstable_scalars() -> None:
