@@ -20,6 +20,13 @@ table, and each output column -> its source column:
     and `X` -> `prop__X` (base mode keeps the `prop__` prefix in the output
     column name; source mode strips it). The kind list is every
     `records__<kind>` table in the bundle minus `<mode>.exclude.kinds`.
+  - render elections (base `<mode>.render`, source `tables[].render`): a
+    column elected `{instant: timestamp}` legitimately carries the raw ns
+    value projected through the sidecar's `runtime` anchor, so its domain is
+    the source domain converted through that same anchor — unless the config
+    carries a `rebase:` block (anchor overridden; the column is skipped, not
+    judged). Any other elected rendering (date_parse, decimal, ...) is
+    skipped, never guessed.
 
 For each mapped, non-derived column, asserts that every DISTINCT output
 value exists in the source column's domain. The source domain is the UNION
@@ -157,6 +164,48 @@ def load_reference_targets(bundle_run_duckdb: str) -> dict[tuple[str, str], str]
 _XTABLE = "::"
 
 
+def render_elections(cfg: dict, mode: str) -> dict[tuple[str, str], object]:
+    """{(kind, source_col): election} from the config's render elections.
+
+    base mode:   `base.render` is [{table: records__<kind>, render: {col: e}}]
+    source mode: each `source.tables[]` entry carries its own `render:` map,
+                 keyed by that entry's `kind`.
+    """
+    out: dict[tuple[str, str], object] = {}
+    block = cfg.get(mode) or {}
+    if mode == "base":
+        for entry in block.get("render") or []:
+            kind = entry["table"].removeprefix("records__")
+            for col, election in (entry.get("render") or {}).items():
+                out[(kind, col)] = election
+    else:
+        for tbl in block.get("tables") or []:
+            for col, election in (tbl.get("render") or {}).items():
+                out[(tbl["kind"], col)] = election
+    return out
+
+
+def sidecar_anchor(bundle_run_duckdb: str) -> tuple[str, str] | None:
+    """The sidecar's `runtime` anchor as (start_datetime, timezone), or None.
+
+    Like `load_reference_targets`, reading the sidecar beside `run.duckdb`
+    keeps this checker data-only. A missing or unreadable sidecar, or one
+    with no runtime anchor, returns None (elected-instant columns are then
+    skipped rather than misjudged)."""
+    sidecar = os.path.join(os.path.dirname(bundle_run_duckdb), "base.json")
+    try:
+        with open(sidecar) as f:
+            doc = json.load(f)
+    except (OSError, ValueError):
+        return None
+    runtime = doc.get("runtime") or {}
+    start = runtime.get("start_datetime")
+    zone = runtime.get("timezone")
+    if not start or not zone:
+        return None
+    return start, zone
+
+
 def auto_column_maps(
     cfg: dict, mode: str, con: duckdb.DuckDBPyConnection, bundle_path: str
 ) -> list[tuple[str, dict, dict[str, str]]]:
@@ -172,6 +221,9 @@ def auto_column_maps(
     guessed."""
     elections = resolve_elections(cfg)
     refs = load_reference_targets(bundle_path) if elections else {}
+    renders = render_elections(cfg, mode)
+    anchor = sidecar_anchor(bundle_path) if renders else None
+    rebased = "rebase" in cfg
     exclude = set(cfg.get(mode, {}).get("exclude", {}).get("kinds", []) or [])
     bundle_tables = [
         row[0]
@@ -205,6 +257,7 @@ def auto_column_maps(
         ]
         surface = elections.get(kind, "record_id")
         col_map = {}
+        instant_anchors: dict[str, tuple[str, str]] = {}
         for oc in out_cols:
             source_col = None
             if oc == "id":
@@ -217,6 +270,22 @@ def auto_column_maps(
                 source_col = f"prop__{oc}"  # source mode: prefix stripped
             if source_col is None:
                 continue
+            election = renders.get((kind, source_col))
+            if election is not None:
+                # An elected `{instant: timestamp}` column carries the raw ns
+                # value projected through the sidecar's runtime anchor -- its
+                # domain converts through that same anchor. Under a `rebase:`
+                # block the anchor is author-overridden, and any other elected
+                # rendering has no mechanical trace: skipped, never guessed.
+                if (
+                    isinstance(election, dict)
+                    and election.get("instant") == "timestamp"
+                    and not rebased
+                    and anchor is not None
+                ):
+                    instant_anchors[source_col] = anchor
+                else:
+                    continue
             # A reference column renders its TARGET kind's elected surface, so
             # its domain is the target's surface column, not the verbatim ref.
             target = refs.get((kind, source_col))
@@ -227,7 +296,13 @@ def auto_column_maps(
                 if target_surface != "record_id":
                     source_col = f"records__{target}{_XTABLE}{target_surface}"
             col_map[oc] = source_col
-        result.append((output_table, {"grain": "records", "kind": kind}, col_map))
+        result.append(
+            (
+                output_table,
+                {"grain": "records", "kind": kind, "instant_anchors": instant_anchors},
+                col_map,
+            )
+        )
     return result
 
 
@@ -240,6 +315,21 @@ def check_column(
 ) -> dict:
     kind = source["kind"]
     src_table, hist_prop = grain_source(source)
+    instant = (source.get("instant_anchors") or {}).get(source_col)
+
+    def domain_expr(raw_sql: str) -> str:
+        """The domain-side varchar expression for one raw source value: the
+        value verbatim, or -- for an elected-instant column -- the value
+        projected through the sidecar's runtime anchor, exactly as the
+        exporter renders it (ns truncated to whole microseconds)."""
+        if instant is None:
+            return f"cast({raw_sql} as varchar)"
+        start, zone = instant
+        return (
+            f"cast(timezone('{zone}', TIMESTAMPTZ '{start}'"
+            f" + to_microseconds(CAST({raw_sql} AS BIGINT) // 1000)) as varchar)"
+        )
+
     if _XTABLE in source_col:
         # Cross-table domain override (a key-elected reference column): the
         # domain is the target kind's elected-surface column. Elected surfaces
@@ -250,15 +340,16 @@ def check_column(
         where = f" where kind = '{kind}'" + (
             f" and property = '{hist_prop}'" if hist_prop else ""
         )
+    quoted_source = f'"{source_col}"'
     domain_parts = [
-        f'select distinct cast("{source_col}" as varchar) from src.{src_table}{where}'
+        f"select distinct {domain_expr(quoted_source)} from src.{src_table}{where}"
     ]
     # Only a records-grain prop__ column carries past states in `history`; a
     # membership/history grain row IS the historical fact, already in its table.
     if source_col.startswith("prop__") and src_table.startswith("records__"):
         prop_name = source_col.removeprefix("prop__")
         domain_parts.append(
-            "select distinct value from src.history "
+            f"select distinct {domain_expr('value')} from src.history "
             f"where kind = '{kind}' and property = '{prop_name}'"
         )
     domain_sql = " union ".join(domain_parts)

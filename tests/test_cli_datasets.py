@@ -1,7 +1,7 @@
 """Tests for the `fabulexa-forge datasets` verb (list, get).
 
 Covers:
-- `datasets list` against the shipped (empty) manifest: text and json, exit 0
+- `datasets list` against the shipped manifest: text and json, exit 0
 - `datasets list` performs no network I/O (the transport seam is never called)
 - Bare `datasets` / unknown sub-verb: argparse usage error, exit 2
 - `datasets --help` / `-h`: usage on stdout, exit 0
@@ -61,30 +61,37 @@ def _make_entry(archive_bytes: bytes) -> DatasetEntry:
     )
 
 
-def test_datasets_list_text_empty_catalog_renders_no_datasets_line(
+def test_datasets_list_text_shipped_catalog_renders_every_entry(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """`datasets list` against the shipped (empty) catalog renders the
-    no-datasets line to stdout."""
+    """`datasets list` against the shipped catalog renders every entry to
+    stdout, in authored order."""
     exit_code = main(["datasets", "list"])
     captured = capsys.readouterr()
     assert exit_code == 0
-    assert captured.out == "no datasets published for this version\n"
+    assert (
+        captured.out.index("airline-ops")
+        < captured.out.index("saas-billing")
+        < captured.out.index("nhs")
+    )
     assert captured.err == ""
 
 
-def test_datasets_list_json_empty_catalog(
+def test_datasets_list_json_shipped_catalog(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """`datasets list --format json` against the shipped (empty) catalog renders
-    the empty datasets list plus the declared empty_reason, and nothing else."""
+    """`datasets list --format json` against the shipped catalog renders the
+    datasets list and nothing else — the undeclared empty_reason is excluded."""
     exit_code = main(["datasets", "list", "--format", "json"])
     captured = capsys.readouterr()
     assert exit_code == 0
     document = json.loads(captured.out)
-    assert document["datasets"] == []
-    assert document["empty_reason"]
-    assert set(document) == {"datasets", "empty_reason"}
+    assert [entry["name"] for entry in document["datasets"]] == [
+        "airline-ops",
+        "saas-billing",
+        "nhs",
+    ]
+    assert set(document) == {"datasets"}
     assert captured.err == ""
 
 

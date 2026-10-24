@@ -40,12 +40,16 @@ ENTRY_TWO = DatasetEntry.model_validate(
 )
 
 
-def test_load_manifest_returns_empty_catalog() -> None:
-    """load_manifest() returns the shipped catalog, offline: empty until packs are
-    rebuilt at the supported version, with the emptiness declared."""
+def test_load_manifest_returns_populated_catalog() -> None:
+    """load_manifest() returns the shipped catalog, offline: populated with the
+    packs rebuilt at the supported version, empty_reason omitted."""
     manifest = load_manifest()
-    assert manifest.datasets == []
-    assert manifest.empty_reason is not None
+    assert [entry.name for entry in manifest.datasets] == [
+        "airline-ops",
+        "saas-billing",
+        "nhs",
+    ]
+    assert manifest.empty_reason is None
 
 
 def test_empty_reason_valid_on_empty_catalog() -> None:
@@ -74,12 +78,10 @@ def test_blank_or_multiline_empty_reason_rejected() -> None:
             DatasetManifest.model_validate({"datasets": [], "empty_reason": reason})
 
 
-def test_render_of_shipped_catalog_is_no_datasets_line() -> None:
-    """The shipped (empty) catalog renders the no-datasets line."""
-    assert (
-        render_dataset_listing(load_manifest(), "text")
-        == "no datasets published for this version"
-    )
+def test_render_of_shipped_catalog_lists_every_entry() -> None:
+    """The shipped catalog's text render names every entry, in authored order."""
+    text = render_dataset_listing(load_manifest(), "text")
+    assert text.index("airline-ops") < text.index("saas-billing") < text.index("nhs")
 
 
 def test_text_render_of_empty_manifest_is_no_datasets_line() -> None:
@@ -88,6 +90,18 @@ def test_text_render_of_empty_manifest_is_no_datasets_line() -> None:
     assert (
         render_dataset_listing(manifest, "text")
         == "no datasets published for this version"
+    )
+
+
+def test_text_render_carries_declared_empty_reason() -> None:
+    """Text render of an empty manifest with empty_reason prints the reason
+    under the no-datasets line — intentional emptiness is distinguishable."""
+    manifest = DatasetManifest.model_validate(
+        {"datasets": [], "empty_reason": "packs pending rebuild"}
+    )
+    assert (
+        render_dataset_listing(manifest, "text")
+        == "no datasets published for this version\npacks pending rebuild"
     )
 
 
