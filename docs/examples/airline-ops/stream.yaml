@@ -35,9 +35,9 @@
 #                  planned destination, base, departure bank) rides every
 #                  event. `scheduled_departure` is the producer's raw
 #                  sim-instant stamp (BIGINT ns on the tape's clock); the
-#                  `render:` election ({instant: timestamp}) puts it on the
+#                  `render:` election ({instant: timestamptz}) puts it on the
 #                  same ops clock as the table exports, so the wire carries
-#                  the app database's wallclock text, not a raw ns offset.
+#                  the app database's zone-aware text, not a raw ns offset.
 #   lifecycle    — journey_instance is not sub-typed (journey_type is not a
 #                  `<kind>_type` discriminator domain), so one stream carries
 #                  all four processes (50,262 events); `process` on every
@@ -60,12 +60,14 @@
 # CLOCK: the `rebase:` block declares the carrier's operations clock — the
 # same declaration as the three table configs. The emit's anchor is
 # 2026-01-05T00:00:00 UTC (an eight-week burn-in, then the published quarter
-# from 2026-03-02); the origin is repinned to local midnight in
-# America/Phoenix (a real US ops zone, no DST, so the daily cadence holds
-# the same wall clock all the way); `grain: minute` truncates each event's
-# `ts` to whole minutes — real feeds are minute-grained at best, and
-# microsecond `ts` was round-1 QA's fastest synthetic tell. Event order,
-# `seq`, and the full-ns `event_sim_time` key are untouched.
+# from 2026-03-02); the carrier runs on Eastern time, so the origin is
+# repinned to local midnight in America/New_York — the payload's
+# scheduled-departure stamp elects `timestamptz` and carries its real UTC
+# offset (-05:00 EST until the 2026-03-08 DST transition, -04:00 EDT after);
+# `grain: minute` truncates each event's `ts` to whole minutes — real feeds
+# are minute-grained at best, and microsecond `ts` was round-1 QA's fastest
+# synthetic tell. Event order, `seq`, and the full-ns `event_sim_time` key
+# are untouched.
 # Bootstrap is supplied at the CLI (`--bootstrap-servers ...`) when the sink
 # is kafka.
 
@@ -73,7 +75,7 @@ content: state-changes
 
 rebase:
   base_date: 2026-01-05
-  timezone: America/Phoenix
+  timezone: America/New_York
   grain: minute
 
 keys:
@@ -100,7 +102,7 @@ streams:
       destination: destination_id
       bank: departure_bank
     render:
-      scheduled_departure: {instant: timestamp}
+      scheduled_departure: {instant: timestamptz}
     kind_label: flight_leg
   - name: lifecycle
     kind: journey_instance

@@ -38,19 +38,22 @@
 # stays a column here by design; the curated exports are where the engine's
 # counters stop surfacing.
 #
-# TIMESTAMPS: lifecycle columns land as wallclock TIMESTAMPs through the
-# `rebase:` block below — the carrier's operations clock. The emit's own
-# anchor is 2026-01-05T00:00:00 UTC and the tape is 146 days: an eight-week
-# burn-in and then the published quarter from 2026-03-02. The origin is
-# repinned to local midnight in America/Phoenix (a real US ops zone with no
-# DST, so the daily cadence holds the same wall clock all the way), and
-# `grain: minute` truncates every rendered timestamp to whole minutes — real
-# ops systems are minute-grained at best, and the microsecond surface was
-# round-1 QA's fastest synthetic tell. The same clock is declared in all
-# four configs. Domain `prop__` columns are presentation-verbatim at their
-# declared types, with ONE render election: the legs' `scheduled_departure`
-# is the producer's sim-instant stamp (BIGINT ns on the tape's clock), and
-# `{instant: timestamp}` puts it on the same ops clock as the structural
+# TIMESTAMPS: lifecycle columns land as zone-aware TIMESTAMPTZ values
+# through the `rebase:` block and the per-table `render:` elections below —
+# the carrier's operations clock. The emit's own anchor is
+# 2026-01-05T00:00:00 UTC and the tape is 146 days: an eight-week burn-in
+# and then the published quarter from 2026-03-02. The carrier runs on
+# Eastern time, so the origin is repinned to local midnight in
+# America/New_York and every rendered instant carries its real UTC offset —
+# -05:00 (EST) until the 2026-03-08 DST transition, -04:00 (EDT) after it
+# (a frozen year-round offset was itself a synthetic tell). `grain: minute`
+# truncates every rendered timestamp to whole minutes — real ops systems are
+# minute-grained at best, and the microsecond surface was round-1 QA's
+# fastest synthetic tell. The same clock is declared in all four configs.
+# Domain `prop__` columns are presentation-verbatim at their declared types,
+# with ONE payload render election: the legs' `scheduled_departure` is the
+# producer's sim-instant stamp (BIGINT ns on the tape's clock), and
+# `{instant: timestamptz}` puts it on the same ops clock as the structural
 # columns instead of leaving a raw nanosecond offset in the dump.
 #
 # SLICE_ONLY: every non-exempt `temporal_class: slice_only` column is
@@ -62,7 +65,7 @@ mode: base
 
 rebase:
   base_date: 2026-01-05
-  timezone: America/Phoenix
+  timezone: America/New_York
   grain: minute
 
 base:
@@ -74,7 +77,25 @@ base:
   render:
     - table: records__actor
       render:
-        prop__scheduled_departure: {instant: timestamp}
+        created_sim_time: timestamptz
+        deactivated_at: timestamptz
+        prop__scheduled_departure: {instant: timestamptz}
+    - table: records__entity
+      render:
+        created_sim_time: timestamptz
+        deactivated_at: timestamptz
+    - table: records__journey_instance
+      render:
+        created_sim_time: timestamptz
+        deactivated_at: timestamptz
+    - table: records__resource
+      render:
+        created_sim_time: timestamptz
+        deactivated_at: timestamptz
+    - table: records__tick_decision
+      render:
+        created_sim_time: timestamptz
+        deactivated_at: timestamptz
 
   rename:
     - table: records__actor
