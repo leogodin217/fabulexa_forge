@@ -334,6 +334,7 @@ a check, no operation whose defect the reader's skip-guards silently swallow).
 | [`dim-with-fk-reference`](../../examples/recipes/dim-with-fk-reference/config.yaml) | FK reference resolution: denormalize a related record's identity onto a dimension row via the labeled `references` edge (`via: reference`) |
 | [`fact-fk-via-membership`](../../examples/recipes/fact-fk-via-membership/config.yaml) | FK resolved through a membership edge (`via: membership`) — denormalize the linked member onto the owner row |
 | [`fk-ambiguous-path-hint`](../../examples/recipes/fk-ambiguous-path-hint/config.yaml) | `path` hint that disambiguates a reference FK when multiple edges reach the same target kind |
+| [`fact-identity-via-thin-dim`](../../examples/recipes/fact-identity-via-thin-dim/config.yaml) | A `keys:` election renders only through fk edges and dim key columns — a plain `from:` on a member/reference column stays the raw record_id — so a fact population's elected identity reaches other facts through a thin records-grain dim every fact FKs into |
 | [`lookup-reference-property`](../../examples/recipes/lookup-reference-property/config.yaml) | `lookup` column: denormalize a related record's type-1 attribute *value* inline (the FK recipe carries the id; this carries the value) |
 
 **Derived columns**

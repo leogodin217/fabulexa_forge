@@ -1,0 +1,22 @@
+tables:
+  dim_patient:
+    columns: [patient_key, patient_name]
+    row_count: 2
+    contains_rows:
+      - patient_key: 0
+        patient_name: Alice
+      - patient_key: 1
+        patient_name: Bob
+
+  fact_queue_wait:
+    columns: [patient_key, patient_record_id, priority]
+    row_count: 2
+    contains_rows:
+      # The fk edge renders the elected record_index; the plain `from:`
+      # projection of the same member stays the raw record_id.
+      - patient_key: 0
+        patient_record_id: p001
+        priority: "2"
+      - patient_key: 1
+        patient_record_id: p002
+        priority: "1"

@@ -180,8 +180,13 @@ def render_elections(cfg: dict, mode: str) -> dict[tuple[str, str], object]:
                 out[(kind, col)] = election
     else:
         for tbl in block.get("tables") or []:
+            kind = tbl.get("kind")
+            if kind is None:
+                # A junction entry (membership:) renders interval bounds, not
+                # records columns; the auto maps cover state tables only.
+                continue
             for col, election in (tbl.get("render") or {}).items():
-                out[(tbl["kind"], col)] = election
+                out[(kind, col)] = election
     return out
 
 

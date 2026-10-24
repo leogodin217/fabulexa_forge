@@ -7,38 +7,49 @@
 # run. The scenario: a two-base carrier (CVG and SLC) flies a quarter of
 # out-and-back legs after an eight-week burn-in; each leg assembles a tail, a
 # captain, and a first officer from per-base pools; crew duty, sickness, days
-# off, paydays, hires and resignations drive supply; faults ground tails; a
-# spring flu wave stresses the fabric. Since realism v2 the schedule stamps
-# each leg's planned departure instant (`scheduled_departure`) — so delay vs
-# plan is a first-class join, while the WAIT and ASSIGNMENT facts still carry
-# where the delay came from.
+# off, semi-monthly paydays, hires and resignations drive supply; faults
+# ground tails; a March flu wave stresses the fabric. Since v3 the published
+# departure is the leg's drawn 5-minute-grid slot plus a fixed 45-minute ops
+# allowance — ops release starts at the slot instant, so a clean gate process
+# pushes EARLY (61.7% of flown legs this emit, measured): negative delay vs
+# plan is correct data, not a defect. v3 also types the cancellation cause
+# (`cancel_reason`), counts consecutive duty days (`duty_days`, the
+# 1-rest-day-in-7 legality rule), publishes per-city-pair block minutes on
+# the destination, and ships the operating bases as entity rows with their
+# IANA timezones.
 #
 # The bundle speaks the simulator's ontology: `actor`, `entity`, `resource`,
 # `journey_instance`, `queue`, `tick_decision`. The atlas says what each is
 # here — actor is BOTH populations (individual crew members AND flight legs,
-# split by actor_type), entity is the airport catalogue, resource is the tail
-# fleet plus one duty station per crew member. Every output name below is the
-# domain's, and every count in this log was measured against THIS emit.
+# split by actor_type), entity is the airport catalogue PLUS the two
+# operating bases (split by entity_type), resource is the tail fleet plus one
+# duty station per crew member. Every output name below is the domain's, and
+# every count in this log was measured against THIS emit.
 #
 # Curation decisions (the author judgment init can't make):
 #
-#   SPLIT    actor -> dim_crew_member (93 members) + the leg facts (2,601
+#   SPLIT    actor -> dim_crew_member (102 members) + the leg facts (2,737
 #            legs). The two sub-types share nothing but `base`: crew carries
 #            the HR surface (seat, role, shift, names, status,
-#            sickness_episodes), flight carries the schedule surface (bank,
-#            scheduled departure, destination, flight number).
-#            `sub_type_columns` partitions them; one conformed table would be
-#            two unrelated populations glued on NULLs.
+#            sickness_episodes, duty_days), flight carries the schedule
+#            surface (bank, scheduled departure, cancel reason, destination,
+#            flight number). `sub_type_columns` partitions them; one
+#            conformed table would be two unrelated populations glued on
+#            NULLs.
 #   SPLIT 2  the leg itself splits into dim_scheduled_leg + fact_flight_leg:
 #            - dim_scheduled_leg (records__actor, filter flight): the leg as
 #              SCHEDULED — leg code, flight number, base, bank, destination,
-#              and since v2 the stamped scheduled departure instant — keyed
-#              on the elected presentation_id (LEG-nnnnn).
+#              and the stamped published departure instant — keyed on the
+#              elected presentation_id (LEG-nnnnn).
 #            - fact_flight_leg (records__journey_instance, filter
-#              journey_type=flight, 2,601 rows — exactly one per leg,
+#              journey_type=flight, 2,737 rows — exactly one per leg,
 #              verified): the leg's operational OUTCOME (current_state at
-#              tape's end: 2,464 completed, 133 cancelled, 4 still on the
-#              schedule), which the actor record does not carry.
+#              tape's end: 1,992 completed, 119 cancelled, 611 still
+#              published for operating days past the tape, 11 awaiting
+#              their bank, 4 in motion). The v3 typed cancellation cause
+#              is stamped on the leg ACTOR, so it rides dim_scheduled_leg
+#              (a journey-sourced fact cannot look up a tracked actor
+#              property — the lookup gate refuses non-constant sources).
 #            Mechanically the dim is also the election's rendering surface:
 #            dimensional renders an elected identity only through `fk` edges,
 #            so every leg-grain fact reaches LEG-nnnnn by declaring
@@ -50,32 +61,47 @@
 #            (CRW-nnnn) and leg codes (LEG-nnnnn) are the airline's own
 #            minted identifiers — prefixed, offset, gapped counters,
 #            emit-unique — so the dims key on them and every fk edge renders
-#            them. The leg's reused flight number (FXnnn, 24 values, one per
+#            them. The leg's reused flight number (FXnnn, one per
 #            (bank, destination) pair — verified) is an ATTRIBUTE, not the
-#            key. Beyond actor, this emit's record_id / record_index are
-#            both dense creation-order counters (the round-1 QA tell), so
-#            the other populations avoid them where a stable natural key
-#            exists: dim_airport keys on airport_code (untracked, verified
-#            unique) and the lifecycle timeline keys on its subject +
-#            process instead of the engine's journey id. The ONE exception
-#            is the tail fleet: `tail_number` is declared history_tracked
-#            (not immutable) by the producer, so the key-stability gate
-#            refuses it as a key and `lookup` refuses it as a source —
-#            dim_aircraft keeps a record_index surrogate (aircraft_key, 20
-#            rows) with the registration beside it. Flagged upstream:
-#            declaring projection-minted constants immutable would free it.
-#   SCHEDULE v2's headline property, `scheduled_departure`, is a sim-instant
-#            stamped by the producer as a record property (BIGINT ns on the
-#            tape's clock; value == the depart firing's clock.now, verified
-#            on all 2,597 stamps). It lands on dim_scheduled_leg through the
-#            prop-source form of `derived: timestamp`, so it renders on the
-#            same ops clock as every other instant; NULL on the 4 legs still
-#            awaiting their bank at tape's end. Delay vs plan =
+#            key. Beyond actor, no engine counter surfaces as a key:
+#            dim_airport keys on airport_code and dim_operating_base on
+#            base_code (both natural catalogue keys, verified unique), the
+#            lifecycle timeline keys on its subject + process instead of
+#            the engine's journey id, and dim_aircraft now keys on the
+#            REGISTRATION — `tail_number` is declared temporal_class:
+#            constant by the producer since airline-ops v3, and the key and
+#            lookup gates accept a constant-class tracked property, so the
+#            round-2 record_index surrogate (aircraft_key) is gone and
+#            fact_tail_assignment carries the tail_number itself (a
+#            same-record lookup at the hold grain). v3 also mints JRN-/DEC-
+#            presentation keys for journey_instance / tick_decision; this
+#            star still carries no journey or decision identity — the
+#            timeline's subject + process key and fact_payday's
+#            (crew_code, paid_at) key never needed one — but the source and
+#            stream exports elect them.
+#   SCHEDULE `scheduled_departure` is a sim-instant stamped by the producer
+#            as a record property (BIGINT ns on the tape's clock). Since v3
+#            it is the PUBLISHED departure: the leg's drawn 5-minute-grid
+#            slot plus the fixed 45-minute ops allowance. Ops release (tail,
+#            crew, boarding) starts at the SLOT instant, so a clean gate
+#            process pushes ahead of the published time — 61.7% of flown
+#            legs push early (measured; delays span -20 to +474 minutes) —
+#            and negative delay vs plan is correct data. It lands on
+#            dim_scheduled_leg through the prop-source form of `derived:
+#            timestamp`, so it renders on the same ops clock as every other
+#            instant; NULL on the 622 legs (611 published + 11 scheduled)
+#            that had not drawn their slot by tape's end. Delay vs plan =
 #            fact_lifecycle_state (process='flight', state='enroute_out')
 #            entered_at minus this dim's scheduled_departure_at.
+#   BLOCKS   v3 publishes per-city-pair block minutes on the destination
+#            (sched_block_{cvg,slc}_{out,in}, 5-minute grid). They land on
+#            dim_airport as four block-minute columns. Scheduled ARRIVAL is
+#            scheduled_departure + the matching outbound block — a join by
+#            design (pick the column by the leg's home_base), so no
+#            pre-materialized arrival column exists here.
 #   FACT     journey_instance's state timeline -> fact_lifecycle_state at
-#            history_interval grain: 47,652 state-occupancy intervals over
-#            2,876 journeys (16.6 versions/record — a timeline, not a
+#            history_interval grain: 50,227 state-occupancy intervals over
+#            3,039 journeys (16.5 versions/record — a timeline, not a
 #            dimension, whatever record_roles says). One table, not four:
 #            `filter` is records-grain-only, so a history_interval table
 #            cannot be split by the owning record's journey_type — the
@@ -88,35 +114,49 @@
 #            process) identifies a journey 1:1 in this emit (verified — zero
 #            duplicate (actor, journey_type) pairs), and at the carrier's
 #            minute-grained clock a journey can pass through two states
-#            within one displayed minute (170 such pairs measured), so the
+#            within one displayed minute (114 such pairs measured), so the
 #            state joins the key — zero duplicate key tuples verified. No
-#            engine journey id is needed or carried. A state passed through
-#            at a single instant leaves no row at all (the tape records the
-#            instant's final value), so dispatching appears only for the 10
-#            legs that actually waited for a tail — see the README overlay.
-#   PAYDAY   v2 makes the payday instantaneous — and an instantaneous state
-#            never lands in the state history (active -> payday -> active at
-#            one instant collapses to no change), so the pay cadence would
-#            be invisible in fact_lifecycle_state. Its only surface is the
-#            tick_decision record the engine mints per payslip: 408
-#            payslip_issued rows -> fact_payday, the crew member resolved
-#            through the decision's journey reference (journey_instance ->
-#            actor, a two-hop fk path). This is the one tick_decision signal
-#            the timeline cannot carry — the rest stay dropped (below).
+#            engine journey id is needed or carried — the v3 JRN- journey
+#            codes exist, but this timeline's natural key never needed one
+#            (the source and stream exports elect them). A state passed
+#            through at a single instant leaves no row at all (the tape
+#            records the instant's final value), so dispatching appears only
+#            for the 253 legs that actually waited for a tail, and
+#            `committing` only for the 38 weather scrubs administered there
+#            — see the README overlay.
+#   PAYDAY   the payday is instantaneous — and an instantaneous state never
+#            lands in the state history (active -> payday -> active at one
+#            instant collapses to no change), so the pay cadence would be
+#            invisible in fact_lifecycle_state. Its only surface is the
+#            tick_decision record the engine mints per payslip: 859
+#            payslip_issued rows (semi-monthly) -> fact_payday, the crew
+#            member resolved through the decision's journey reference
+#            (journey_instance -> actor, a two-hop fk path). This is the one
+#            tick_decision signal the timeline cannot carry — the rest stay
+#            dropped (below).
 #   DIM      dim_airport keys on airport_code (12 rows, unique — the
 #            carrier's own catalogue key). Route class and schedule weight
-#            are PER ORIGIN BASE since realism v2 — class is a fact of the
+#            are PER ORIGIN BASE — class is a fact of the
 #            city pair, not the airport (SEA is long from CVG, medium from
 #            SLC) — so the dim carries route_class_from_cvg /
-#            route_class_from_slc and popularity_cvg / popularity_slc; a
+#            route_class_from_slc and popularity_cvg / popularity_slc, and
+#            since v3 the four published block-minute columns (see BLOCKS); a
 #            leg's haul class is its destination's class from the leg's own
 #            home_base. dim_scheduled_leg carries airport_code (a lookup
 #            through the leg's immutable destination reference) as its join
 #            surface to this dim.
-#   DIM->T1  dim_aircraft (20 rows; record_index surrogate, registration
-#            beside it — see KEYS). init proposed SCD-2 because `allocated`
+#   DIM      dim_operating_base (entity/base, 2 rows — new in v3): the
+#            carrier's operating bases with their IANA timezones. base_code
+#            matches the CVG/SLC strings every home_base/base column
+#            carries, so it is the conversion handle a consumer joins to
+#            derive station-local time from the ops-clock instants. The run
+#            itself has ONE civil clock (America/New_York; SLC's windows are
+#            authored at a fixed -2h on that anchor) — the timezone column
+#            is data to join on, never a second render clock.
+#   DIM->T1  dim_aircraft (12 rows; keyed on the registration since v3 —
+#            see KEYS). init proposed SCD-2 because `allocated`
 #            (slots currently held) and `capacity` are history-tracked.
-#            `allocated` is operational STATE (5,174 flips over 20 tails),
+#            `allocated` is operational STATE (3,656 flips over 12 tails),
 #            not a slowly changing attribute, and every tail's capacity is
 #            the constant 1 (measured; the spare-tails capacity override
 #            lives on a fork branch this trunk-only emit does not carry).
@@ -124,32 +164,37 @@
 #            The per-hold detail `allocated` summarizes is already in
 #            fact_tail_assignment at its own grain, so the flip timeline is
 #            dropped, not lost.
-#   SCD-2    dim_crew_member, windowed on the KIND's history: `status` (the
-#            HR lifecycle the atlas itself calls SCD-2) and
-#            `sickness_episodes` (episodes to date) are both projected, so
-#            nearly every version differs in a visible column. 725 history
-#            rows over 353 distinct (member, instant) pairs measured — the
-#            same-instant rows are each member's genesis stamp, which
-#            collapses to one version, and no member carries two change
-#            instants inside one displayed minute (verified), so
-#            [crew_code, valid_from] is unique at the minute grain. `seat`
-#            (captain / fo) is the member's rating — constant per member,
-#            the disjointness witness that lets one leg seize a captain and
-#            a first officer from the same preempt pool; `shift` (early /
-#            late, new in v2) is the report window the roster musters the
-#            member in. The members are named individuals (the 80 pins are
-#            authored, the 13 mid-run hires draw from the projection
-#            lexicon); first/last/full name all land here.
+#   SCD-2    dim_crew_member, windowed on the KIND's history — and since v3
+#            that history includes `duty_days`, the consecutive-duty-day
+#            counter behind the 1-rest-day-in-7 legality rule (<= 5 to
+#            muster; a day off resets it). Version boundaries cut at every
+#            tracked change of the record, so the counter's daily writes
+#            version the dim: 8,867 versions over 102 members (verified =
+#            the kind's distinct (member, instant) change pairs; zero
+#            members carry two change instants inside one displayed minute,
+#            so [crew_code, valid_from] stays unique at the minute grain).
+#            duty_days is therefore PROJECTED — hiding it would leave
+#            thousands of versions differing in no visible column — and the
+#            as-of join reads a member's legality position at any instant.
+#            `status` (the HR lifecycle the atlas itself calls SCD-2) and
+#            `sickness_episodes` (episodes to date) stay projected as
+#            before. `seat` (captain / fo) is the member's rating —
+#            constant per member, the disjointness witness that lets one
+#            leg seize a captain and a first officer from the same preempt
+#            pool; `shift` (early / late) is the report window the roster
+#            musters the member in. The members are named individuals (84
+#            on the payroll when the data opens, 18 mid-run hires from the
+#            projection lexicon); first/last/full name all land here.
 #   DROPPED  crew `constitution` (robust/typical/fragile): the generator's
 #            sickness-propensity parameter. Attaching a frailty score to a
 #            named crew member is the same governance problem nhs's
 #            quality_rating poses; the OBSERVED sickness record (episodes,
 #            sick intervals) stays, the generator input goes.
 #   DROPPED  fact_leg_destination (the round-1 bridge from bound_roles role
-#            `dest`): v2 moved the destination onto the flight actor as an
+#            `dest`): the destination lives on the flight actor as an
 #            immutable reference property — the route is the leg's identity
-#            now — so the binding duplicates what dim_scheduled_leg already
-#            carries as airport_code. The 2,601 dest bindings (verified
+#            — so the binding duplicates what dim_scheduled_leg already
+#            carries as airport_code. The 2,737 dest bindings (verified
 #            still one per leg) stay in the emit; nothing joins them here.
 #   NO DIM   resource/duty_station (93 rows, one per crew member): it is the
 #            engine's availability server for the member, not a business
@@ -164,24 +209,49 @@
 #            scenario exists to produce — so the kind is left undeclared (NOT
 #            excluded: an `exclude` guard would take the waiters table with
 #            it) and the waits become the two wait facts below.
-#   DROPPED  tick_decision (10,952 records), except the payslips (see
-#            PAYDAY): `context` is the empty JSON object on every row
-#            (measured), and every other decision_type mirrors a state entry
-#            the timeline already carries at better grain (duty_started
-#            7,477 = `on_duty` entries; flight_planned 2,601 = `scheduled`;
-#            sickness_episode 235 = `sick`; flight_cancelled 133 =
-#            `cancelled`; fault_hold 75; reserve_callout 10 — the filled
-#            callouts are fact_leg_crew's reserve rows; hire_completed 13 =
-#            the onboarding entries). Left undeclared, not excluded — its
-#            bindings table is engine-redundant here too.
+#   DROPPED  tick_decision (11,704 records), except the payslips (see
+#            PAYDAY). Since v3 every decision carries a JSON `context`
+#            payload, but each one MIRRORS a typed surface this star already
+#            carries (verified: the cancel decisions' context.reason matches
+#            the leg's typed cancel_reason on all 119 rows), and every other
+#            decision_type mirrors a state entry the timeline carries at
+#            better grain (duty_started 7,709 = `on_duty` entries;
+#            flight_planned 2,737 = the schedule entries; sickness_episode
+#            201 = `sick`; cancelled_crew 81 + cancelled_weather 38 = the
+#            `cancelled` close-outs, with the reason on the leg's typed
+#            column; fault_hold 49; reserve_callout_captain 7 +
+#            reserve_callout_fo 5 — the filled callouts are fact_leg_crew's
+#            reserve rows; hire_completed 18 = the onboarding entries). Key
+#            on typed columns, never the JSON. Left undeclared, not
+#            excluded — its dest-only bindings table is engine-redundant
+#            here too.
+#   REASONS  v3 ends the round-2 "catalogue awaiting coded events" state:
+#            the two author-maintained reference catalogues are now KEYED
+#            from the emit's own typed columns, config-only.
+#            - dim_scheduled_leg.cancellation_code: a value_map over the
+#              leg's typed cancel_reason onto dim_cancellation_reason's DOT
+#              letters — weather -> B, the six crew-supply causes -> A
+#              (carrier-controllable). The raw reason rides beside it. It
+#              sits on the leg record, not fact_flight_leg, because the
+#              typed cause is an ACTOR property and the journey-sourced
+#              fact cannot look up a tracked (non-constant) source.
+#            - fact_leg_assembly_wait.delay_code: a value_map over the
+#              wait's acquired-rule onto dim_delay_reason's IATA codes —
+#              tail wait -> 93 (aircraft rotation), lineholder captain/fo
+#              waits -> 95 (awaiting flight deck crew), reserve callouts ->
+#              64 (crew shortage / standby).
+#            Both maps are author-declared code assignments over declared
+#            value domains (enum_domains / the claim-rule vocabulary), so
+#            every code traces to a base value through the map.
 #   BRIDGES  the leg's build-up is membership data, not actor properties:
-#            - fact_tail_assignment: holders claim tail_ready (2,597 holds;
-#              zero legs hold two tails — verified) -> dim_aircraft. Block +
+#            - fact_tail_assignment: holders claim tail_ready (2,077 holds;
+#              zero legs hold two tails — verified) -> dim_aircraft via the
+#              registration (a same-record lookup — see KEYS). Block +
 #              turnaround (+ repair) is held_from..released_at.
 #            - fact_leg_crew, at SEAT-HOLD grain: holders claims
 #              captain_aboard + crew_complete (the two boarding seizes,
-#              2,481 + 2,467) + captain_recovered + fo_recovered (reserve
-#              callouts after a mid-block loss, 2 + 6) -> dim_crew_member
+#              2,033 + 2,003) + captain_recovered + fo_recovered (reserve
+#              callouts after a mid-block loss, 6 + 1) -> dim_crew_member
 #              via the station's owner. One row per seat filled, so a fully
 #              crewed leg has two rows; `seat` (looked up from the station)
 #              carries the partition, the same way `process` partitions the
@@ -190,22 +260,21 @@
 #            bound_roles' `tail` / `captain_seat` / `fo_seat` roles duplicate
 #            the holders spans and are dropped; `closed_sign` /
 #            `my_station` / `new_station` are roster mechanism.
-#   WAITS    membership__queue__waiters (1,505) splits cleanly on
+#   WAITS    membership__queue__waiters (1,887) splits cleanly on
 #            elem__on_acquired_rule into two different business facts:
-#            - fact_leg_assembly_wait (499): a LEG waiting for a tail (10),
-#              a captain (408), a first officer (78), or a reserve callout
-#              (1 + 2). Most legs assemble without queuing since v2 — the
-#              5-30 minute delay mass lives in the boarding/taxi interval,
-#              and these rows are the crew-shortage tail of the
-#              distribution.
-#            - fact_duty_release_wait (1,006): a CREW MEMBER queuing to
+#            - fact_leg_assembly_wait (456): a LEG waiting for a tail (253),
+#              a captain (111), a first officer (87), or a reserve callout
+#              (1 + 4). Most legs assemble without queuing — the everyday
+#              delay mass lives in the boarding/taxi interval, and these
+#              rows are the scarce-resource tail of the distribution.
+#            - fact_duty_release_wait (1,431): a CREW MEMBER queuing to
 #              reclaim their own station at duty end behind an airborne leg —
 #              duty overrun.
 #            Splitting keeps each fact's waiter population one sub-type, so
 #            the member id column is one identity kind per table.
-#   FACT     fact_crew_presence: membership__actor__presence (15,409) — the
+#   FACT     fact_crew_presence: membership__actor__presence (15,814) — the
 #            machine-owned duty/sickness occupancy the atlas points at from
-#            the crew sub-type (on_duty 7,477, mustering 7,697, sick 235).
+#            the crew sub-type (on_duty 7,709, mustering 7,904, sick 201).
 #            value_map renders the claim ids as on_duty / sick / mustering.
 #   DOCS     every column carries an author `description:` so the companion
 #            README reads in the carrier's voice, not the simulator's.
@@ -234,9 +303,10 @@
 # star — dim_delay_reason (IATA-style delay codes) and
 # dim_cancellation_reason (DOT-style cancellation categories), loaded from
 # CSVs beside this config and recorded in the manifest as author-supplied
-# (they trace to no emit value). No fact column carries a reason code this
-# quarter — the operational events record none upstream — so they stand as
-# the catalogue an ops warehouse would hold, awaiting coded events.
+# (the catalogue rows trace to no emit value). Since v3 both are KEYED from
+# the facts: dim_scheduled_leg.cancellation_code and
+# fact_leg_assembly_wait.delay_code land on them through author-declared
+# value maps over the emit's typed columns (see REASONS).
 
 mode: dimensional
 
@@ -249,7 +319,7 @@ rebase:
 
 supplements:
   - name: dim_delay_reason
-    description: "The carrier's delay-code catalogue (IATA-style numeric codes, grouped): the reference list dispatchers code delays against. Author-maintained reference data — no fact column carries a delay code this quarter."
+    description: "The carrier's delay-code catalogue (IATA-style numeric codes, grouped): the reference list dispatchers code delays against. Author-maintained reference data; fact_leg_assembly_wait.delay_code joins it."
     columns:
       delay_code: VARCHAR
       delay_group: VARCHAR
@@ -260,7 +330,7 @@ supplements:
       delay_group: "The code's group: passenger, ramp, technical, flight_ops_crew, weather, air_traffic, or reactionary."
       description: "What the code means, as the ops manual words it."
   - name: dim_cancellation_reason
-    description: "The carrier's cancellation-reason categories (DOT-style letter codes). Author-maintained reference data — no fact column carries a cancellation code this quarter."
+    description: "The carrier's cancellation-reason categories (DOT-style letter codes). Author-maintained reference data; dim_scheduled_leg.cancellation_code joins it."
     columns:
       cancellation_code: VARCHAR
       label: VARCHAR
@@ -279,8 +349,6 @@ keys:
   actor:
     crew: presentation_id
     flight: presentation_id
-  resource:
-    aircraft: record_index
 
 dimensional:
   tables:
@@ -316,28 +384,57 @@ dimensional:
         - name: popularity_slc
           from: prop__popularity_slc
           description: "Relative demand weighting used when SLC legs plan a destination."
+        - name: sched_block_from_cvg
+          from: prop__sched_block_cvg_out
+          description: "Published block minutes CVG -> this airport, on the 5-minute grid. Scheduled arrival of a CVG leg's outbound = its scheduled_departure_at plus this column."
+        - name: sched_block_to_cvg
+          from: prop__sched_block_cvg_in
+          description: "Published block minutes this airport -> CVG, on the 5-minute grid."
+        - name: sched_block_from_slc
+          from: prop__sched_block_slc_out
+          description: "Published block minutes SLC -> this airport, on the 5-minute grid. Scheduled arrival of an SLC leg's outbound = its scheduled_departure_at plus this column."
+        - name: sched_block_to_slc
+          from: prop__sched_block_slc_in
+          description: "Published block minutes this airport -> SLC, on the 5-minute grid."
+
+    # --- dim: operating bases (entity/base, 2 rows — new in v3). The
+    #     per-base IANA timezone every home_base/base string joins to for
+    #     station-local time. Data to join on, not a render clock. ---
+    - name: dim_operating_base
+      role: dim
+      scd: type1
+      description: "One row per operating base (crew domicile + hub station): CVG and SLC, each with its IANA timezone. Every home_base/base column joins base_code; the timezone is the conversion handle for deriving station-local time from the ops-clock instants."
+      source:
+        grain: records
+        kind: entity
+        filter: {prop__entity_type: base}
+      key: [base_code]
+      columns:
+        - name: base_code
+          from: prop__code
+          description: "IATA code of the base (CVG or SLC); the string every home_base/base column carries."
+        - name: timezone
+          from: prop__timezone
+          description: "The base's IANA timezone (America/New_York for CVG, America/Denver for SLC). All exported instants are on the carrier's single ops clock; convert with this zone for station-local time."
 
     # --- dim: tail fleet (resource/aircraft) — Type-1; allocated/capacity
     #     are operational state, carried at hold grain in
-    #     fact_tail_assignment. Surrogate-keyed: the registration is
-    #     declared history-tracked upstream, so it cannot be the run-stable
-    #     key (see KEYS). ---
+    #     fact_tail_assignment. Keyed on the registration since v3:
+    #     tail_number is declared temporal_class: constant upstream, which
+    #     the key gate accepts (see KEYS). ---
     - name: dim_aircraft
       role: dim
       scd: type1
-      description: "One row per tail in the fleet — ten based at each of the two stations."
+      description: "One row per tail in the fleet — six based at each of the two stations — keyed on the registration."
       source:
         grain: records
         kind: resource
         filter: {prop__resource_type: aircraft}
-      key: [aircraft_key]
+      key: [tail_number]
       columns:
-        - name: aircraft_key
-          from: record_index
-          description: "Surrogate key for the tail; fact_tail_assignment.aircraft_key joins it. Use tail_number when reading."
         - name: tail_number
           from: prop__tail_number
-          description: "The aircraft's registration (tail number)."
+          description: "The aircraft's registration (tail number); fact_tail_assignment.tail_number joins it."
         - name: home_base
           from: prop__base
           description: "Station the tail is based at: CVG or SLC."
@@ -346,7 +443,7 @@ dimensional:
     - name: dim_crew_member
       role: dim
       scd: type2
-      description: "One row per version of a crew member — a named individual on the payroll, rated for one seat (captain or first officer). Versions window on the member's HR history: employment status changes and sickness episodes."
+      description: "One row per version of a crew member — a named individual on the payroll, rated for one seat (captain or first officer). Versions window on the member's tracked history: employment status changes, sickness episodes, and the consecutive-duty-day counter's daily writes, so the dim reads like the HR system's audit of the crew record; join as-of on [valid_from, valid_to)."
       source:
         grain: records
         kind: actor
@@ -383,6 +480,9 @@ dimensional:
         - name: sickness_episodes_to_date
           from: prop__sickness_episodes
           description: "Sickness episodes recorded against the member up to this version."
+        - name: consecutive_duty_days
+          from: prop__duty_days
+          description: "Consecutive duty days since the member's last rostered day off, as of this version — the 1-rest-day-in-7 legality counter: mustering requires five or fewer and increments it; a day off resets it to zero."
         - name: valid_from
           derived: {scd_window: {bound: valid_from, as: timestamptz}}
           description: "When this version of the member became current."
@@ -390,14 +490,14 @@ dimensional:
           derived: {scd_window: {bound: valid_to, as: timestamptz}}
           description: "When this version was superseded; NULL on the current version."
 
-    # --- dim: the published schedule entry (actor/flight, 2,601 rows) — the
+    # --- dim: the published schedule entry (actor/flight, 2,737 rows) — the
     #     leg as SCHEDULED (leg code, flight number, base, bank, destination,
     #     scheduled departure): the plan every leg-grain fact FKs to. What
     #     HAPPENED to the leg is fact, below. ---
     - name: dim_scheduled_leg
       role: dim
       scd: type1
-      description: "One row per leg on the published schedule: its leg code, published flight number, base, departure bank, planned destination, and the scheduled departure instant. The operational facts (outcome, state timeline, assignments, waits) all join this dim on leg_code; haul class joins on through dim_airport; delay vs plan is any operational instant measured against scheduled_departure_at."
+      description: "One row per leg: its leg code, published flight number, base, departure bank, planned destination, the published departure instant, and — on scrubbed legs — the typed cancellation cause. The operational facts (outcome, state timeline, assignments, waits) all join this dim on leg_code; haul class and block minutes join on through dim_airport; delay vs plan is any operational instant measured against scheduled_departure_at."
       source:
         grain: records
         kind: actor
@@ -424,12 +524,28 @@ dimensional:
           description: "Which departure bank the leg is scheduled in: am or pm."
         - name: scheduled_departure_at
           derived: {timestamp: {source: prop__scheduled_departure, as: timestamptz}}
-          description: "The leg's scheduled departure instant — the published bank opening plus the leg's drawn offset, stamped when the bank fires. Pushback delay is the gap from here to wheels-up (the enroute_out entry in fact_lifecycle_state). NULL on a leg still awaiting its bank at quarter end."
+          description: "The leg's PUBLISHED departure instant: its drawn 5-minute-grid slot plus the fixed 45-minute ops allowance. Ops release starts at the slot, so most flown legs push ahead of this time — negative pushback delay is normal, not an error. Delay = the enroute_out entry in fact_lifecycle_state minus this column; scheduled arrival = this column plus the destination's outbound block minutes from the leg's home_base (dim_airport.sched_block_from_*). NULL on a leg that had not drawn its slot by quarter end."
         - name: scheduled_departure_date_key
           date_ref: {source: prop__scheduled_departure}
-          description: "dim_date.date_key of the scheduled departure day; NULL on a leg still awaiting its bank at quarter end."
+          description: "dim_date.date_key of the published departure day; NULL on a leg that had not drawn its slot by quarter end."
+        - name: cancel_reason
+          from: prop__cancel_reason
+          description: "Why the leg was scrubbed: weather, no_captain, no_fo, captain_sick, fo_sick, no_reserve_captain, or no_reserve_fo — the upstream typed cancellation cause, stamped on the leg record at the scrub. NULL on every leg that was not cancelled (fact_flight_leg.status says whether)."
+        - name: cancellation_code
+          derived:
+            value_map:
+              from: prop__cancel_reason
+              map:
+                weather: B
+                no_captain: A
+                no_fo: A
+                captain_sick: A
+                fo_sick: A
+                no_reserve_captain: A
+                no_reserve_fo: A
+          description: "DOT cancellation category for the scrub; joins dim_cancellation_reason.cancellation_code. Weather scrubs code B (weather); the six crew-supply causes code A (within the carrier's control). NULL on every leg that was not cancelled."
 
-    # --- fact: flight leg operation — grain: one leg (2,601 rows). Built from
+    # --- fact: flight leg operation — grain: one leg (2,737 rows). Built from
     #     the leg's lifecycle record: it carries the outcome the schedule
     #     entry does not. ---
     - name: fact_flight_leg
@@ -446,7 +562,7 @@ dimensional:
           description: "The leg this row closes out; joins dim_scheduled_leg.leg_code."
         - name: status
           from: prop__current_state
-          description: "The leg's lifecycle position at the end of the quarter: completed or cancelled for finished legs; the in-flight stage (scheduled, dispatching, crewing_captain, crewing_fo, boarding, enroute_out, outstation_turn, enroute_in, turnaround, fault_hold) for the few still in motion."
+          description: "The leg's lifecycle position at the end of the quarter: completed or cancelled for finished legs; published or scheduled for legs whose operating day lies past the quarter; the in-flight stage (slotting, committing, dispatching, crewing_captain, crewing_fo, boarding, enroute_out, outstation_turn, enroute_in, turnaround, fault_hold) for the few in motion. The cancellation CAUSE is dim_scheduled_leg.cancel_reason / cancellation_code — the typed reason lives on the leg record."
         - name: entered_schedule_at
           derived: {timestamp: {source: created_sim_time, as: timestamptz}}
           description: "When the leg entered the published schedule."
@@ -455,17 +571,17 @@ dimensional:
           description: "dim_date.date_key of the day the leg entered the published schedule."
         - name: closed_at
           derived: {timestamp: {source: deactivated_at, as: timestamptz}}
-          description: "When the leg closed out (completed or cancelled); NULL for legs still in motion at quarter end."
+          description: "When the leg closed out (completed or cancelled); NULL for legs still open at quarter end — published, scheduled, or in motion."
         - name: closed_date_key
           date_ref: {source: deactivated_at}
-          description: "dim_date.date_key of the day the leg closed out; NULL for legs still in motion at quarter end."
+          description: "dim_date.date_key of the day the leg closed out; NULL for legs still open at quarter end."
 
-    # --- fact: lifecycle state timeline (history_interval grain, 47,652 rows).
+    # --- fact: lifecycle state timeline (history_interval grain, 50,227 rows).
     #     All four processes in one table — `filter` is records-grain-only, so
     #     the `process` column carries the partition. Keyed on subject +
     #     process + entry instant + state: (subject, process) identifies a
     #     journey 1:1 in this emit (verified), and a journey can pass two
-    #     states inside one displayed minute (170 pairs measured), so the
+    #     states inside one displayed minute (114 pairs measured), so the
     #     state joins the key. Pushback delay = enroute_out entered_at minus
     #     the dim's scheduled_departure_at. ---
     - name: fact_lifecycle_state
@@ -502,14 +618,14 @@ dimensional:
           date_ref: {source: lead_sim_time}
           description: "dim_date.date_key of the day the subject left this state; NULL on the state it was still in at quarter end."
 
-    # --- fact: payday (records__tick_decision, filter payslip_issued — 408
+    # --- fact: payday (records__tick_decision, filter payslip_issued — 859
     #     rows). The pay cadence's ONLY surface: the instantaneous payday
     #     state collapses out of the history, so the engine's payslip
     #     decision record carries it. The member resolves through the
     #     decision's journey reference (two reference hops). ---
     - name: fact_payday
       role: fact
-      description: "One row per payslip issued: the member's pay packet landing on the monthly payday, jittered per member through the morning rather than at one synchronized instant. The payday is instantaneous, so it carries an instant, not an interval."
+      description: "One row per payslip issued: the member's pay packet landing on the semi-monthly payday, jittered per member through the morning rather than at one synchronized instant. The payday is instantaneous, so it carries an instant, not an interval."
       source:
         grain: records
         kind: tick_decision
@@ -526,7 +642,7 @@ dimensional:
           date_ref: {source: created_sim_time}
           description: "dim_date.date_key of the payday."
 
-    # --- fact: tail assignment (holders, claim tail_ready — 2,597 rows).
+    # --- fact: tail assignment (holders, claim tail_ready — 2,077 rows).
     #     The hold runs from dispatch grant through turnaround (and repair on a
     #     fault), so its span is tail utilisation. ---
     - name: fact_tail_assignment
@@ -542,9 +658,9 @@ dimensional:
         - name: leg_code
           fk: {to: dim_scheduled_leg, via: membership, member_field: actor}
           description: "The leg holding the tail; joins dim_scheduled_leg.leg_code."
-        - name: aircraft_key
-          fk: {to: dim_aircraft, via: reference}
-          description: "The tail assigned to the leg; joins dim_aircraft.aircraft_key (read tail_number off the dim)."
+        - name: tail_number
+          lookup: {property: tail_number}
+          description: "The registration of the tail assigned to the leg; joins dim_aircraft.tail_number."
         - name: assigned_at
           derived: {timestamp: {source: joined_sim_time, as: timestamptz}}
           description: "When the tail was granted to the leg at dispatch."
@@ -559,7 +675,7 @@ dimensional:
           description: "dim_date.date_key of the day the tail was released."
 
     # --- fact: leg crew assignment at SEAT-HOLD grain (holders, the four
-    #     flight-side station claims — 2,481 + 2,467 boardings, 2 + 6
+    #     flight-side station claims — 2,033 + 2,003 boardings, 6 + 1
     #     reserve callouts). One row per seat filled: a fully crewed leg has a
     #     captain row and a first-officer row. The held resource is the crew
     #     member's duty STATION; the member is its owner, resolved via
@@ -612,7 +728,7 @@ dimensional:
           date_ref: {source: left_sim_time}
           description: "dim_date.date_key of the day the member was released."
 
-    # --- fact: leg assembly waits (waiters, the leg-side rules — 499 rows).
+    # --- fact: leg assembly waits (waiters, the leg-side rules — 456 rows).
     #     Every interval a leg spent queued for a tail, for a captain, for a
     #     first officer, or for a reserve callout. Since v2 most legs
     #     assemble without queuing — these rows are the crew-shortage tail
@@ -651,6 +767,17 @@ dimensional:
                 "flight:recover_captain:captain_recovered": reserve_captain
                 "flight:recover_fo:fo_recovered": reserve_fo
           description: "What the leg was waiting for: a free tail, a lineholder captain or first officer, or a reserve callout for the lost seat."
+        - name: delay_code
+          derived:
+            value_map:
+              from: elem__on_acquired_rule
+              map:
+                "flight:dispatching:tail_ready": "93"
+                "flight:crewing_captain:captain_aboard": "95"
+                "flight:crewing_fo:crew_complete": "95"
+                "flight:recover_captain:captain_recovered": "64"
+                "flight:recover_fo:fo_recovered": "64"
+          description: "IATA delay code for the wait's cause; joins dim_delay_reason.delay_code. A tail wait codes 93 (aircraft rotation: late arrival from another flight); a lineholder captain/first-officer wait codes 95 (awaiting flight deck crew from another flight); a reserve callout codes 64 (flight deck crew shortage: sickness or awaiting standby)."
         - name: queued_from
           derived: {timestamp: {source: joined_sim_time, as: timestamptz}}
           description: "When the leg joined the queue."
@@ -664,7 +791,7 @@ dimensional:
           date_ref: {source: left_sim_time}
           description: "dim_date.date_key of the day the wait ended."
 
-    # --- fact: duty release waits (waiters, the roster-side rule — 1,006
+    # --- fact: duty release waits (waiters, the roster-side rule — 1,431
     #     rows). A crew member queuing to reclaim their own station at duty
     #     end behind an airborne leg: duty overrun. ---
     - name: fact_duty_release_wait
@@ -696,7 +823,7 @@ dimensional:
           date_ref: {source: left_sim_time}
           description: "dim_date.date_key of the day the member stood down."
 
-    # --- fact: crew presence (membership actor.presence — 15,409 rows).
+    # --- fact: crew presence (membership actor.presence — 15,814 rows).
     #     The machine-owned duty/sickness occupancy: duty days, sick episodes,
     #     and muster waits. ---
     - name: fact_crew_presence
