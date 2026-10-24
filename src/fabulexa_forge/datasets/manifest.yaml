@@ -3,8 +3,52 @@
 # fields (sha256, size_bytes, base_format_version) are builder-supplied:
 # run `uv run python tools/build_dataset_pack.py <name> --out <dir>` and
 # paste the printed fragment — never hand-type them.
-# The catalog refills as packs are rebuilt against bundles at the supported version.
-# empty_reason is valid only while datasets is empty: delete it with the first
-# rebuilt entry.
-datasets: []
-empty_reason: "catalog intentionally empty: dataset packs are being rebuilt at base_format_version 13"
+datasets:
+  - name: airline-ops
+    description: >-
+      A two-base regional airline's operating quarter — flight legs assemble
+      an aircraft, captain and first officer from per-base pools, fly out,
+      turn at the outstation and fly home, while duty shifts, rest days,
+      sickness, paydays and resignations drive crew supply, faults ground
+      tails and a flu wave stresses the fabric; delay beyond the scheduled
+      departure is emergent, never scripted.
+    url: https://github.com/leogodin217/fabulexa_forge/releases/download/datasets-v9/airline-ops.tar.gz
+    sha256: db761506b37d7f50833e22177a6f141c9ad785eb783f1bfcdf02cb1f6116ae2e
+    size_bytes: 2439995
+    base_format_version: 13
+    configs: [dimensional.yaml, source.yaml, base.yaml, stream.yaml]
+    commands:
+      - fabulexa-forge export {dir}/bundle {dir}/dimensional.yaml airline-ops-star.duckdb --fmt duckdb
+      - fabulexa-forge export {dir}/bundle {dir}/source.yaml airline-ops-app.duckdb --fmt duckdb
+      - fabulexa-forge export {dir}/bundle {dir}/base.yaml airline-ops-base.duckdb --fmt duckdb
+      - fabulexa-forge stream {dir}/bundle {dir}/stream.yaml --fmt jsonl --sink stdout
+  - name: saas-billing
+    description: >-
+      A B2B SaaS vendor's billing warehouse over five years — accounts on plan
+      tiers with negotiated seat prices and usage discounts, seat holders
+      cycling between use and idleness, a metered usage firehose rated
+      through per-SKU tier ladders, promotions and post-renewal credits; the
+      facts of a monthly invoice, never the invoice itself.
+    url: https://github.com/leogodin217/fabulexa_forge/releases/download/datasets-v9/saas-billing.tar.gz
+    sha256: d92a3759bb16969c724f04b9d20a9b0de6995e8633eeb0454503dc08bac21019
+    size_bytes: 41037239
+    base_format_version: 13
+    configs: [dimensional.yaml]
+    commands:
+      - fabulexa-forge export {dir}/bundle {dir}/dimensional.yaml saas-billing-star.duckdb --fmt duckdb
+  - name: nhs
+    description: >-
+      An acute NHS hospital trust — emergency and elective patients flowing
+      from one arrivals stream through A&E, wards, clinics, diagnostics and
+      surgical pathways, competing for consultants, beds and theatres under
+      seasonal demand pressure.
+    url: https://github.com/leogodin217/fabulexa_forge/releases/download/datasets-v9/nhs.tar.gz
+    sha256: 27e5028544338f765f2f0dfa5a6377ca498e0fa2be1ef42734364471eb58897d
+    size_bytes: 11297745
+    base_format_version: 13
+    configs: [dimensional.yaml, source.yaml, base.yaml, stream.yaml]
+    commands:
+      - fabulexa-forge export {dir}/bundle {dir}/dimensional.yaml nhs-star.duckdb --fmt duckdb
+      - fabulexa-forge export {dir}/bundle {dir}/source.yaml nhs-app.duckdb --fmt duckdb
+      - fabulexa-forge export {dir}/bundle {dir}/base.yaml nhs-base.duckdb --fmt duckdb
+      - fabulexa-forge stream {dir}/bundle {dir}/stream.yaml --fmt jsonl --sink stdout

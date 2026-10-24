@@ -55,7 +55,8 @@ def render_dataset_listing(manifest: DatasetManifest, fmt: str) -> str:
             excluded — raw values, authored entry order, sorted keys,
             separators (",", ":")). An empty manifest renders the
             no-datasets line under "text" and the model document under
-            "json", carrying `empty_reason` only when it is declared.
+            "json", either carrying `empty_reason` only when it is
+            declared.
 
     Returns:
         The complete stdout payload, without trailing newline.
@@ -84,8 +85,15 @@ def _render_json(manifest: DatasetManifest) -> str:
 
 
 def _render_text(manifest: DatasetManifest) -> str:
-    """Render the manifest as the human-readable text listing."""
+    """Render the manifest as the human-readable text listing.
+
+    An empty catalog renders the no-datasets line, followed by the declared
+    `empty_reason` when the manifest carries one — intentional emptiness
+    reads differently from nothing-ever-published.
+    """
     if not manifest.datasets:
+        if manifest.empty_reason is not None:
+            return f"{_NO_DATASETS_LINE}\n{manifest.empty_reason}"
         return _NO_DATASETS_LINE
     return "\n\n".join(_render_entry(entry) for entry in manifest.datasets)
 
