@@ -304,7 +304,7 @@
 # dim_cancellation_reason (DOT-style cancellation categories), loaded from
 # CSVs beside this config and recorded in the manifest as author-supplied
 # (the catalogue rows trace to no emit value). Since v3 both are KEYED from
-# the facts: fact_flight_leg.cancellation_code and
+# the facts: dim_scheduled_leg.cancellation_code and
 # fact_leg_assembly_wait.delay_code land on them through author-declared
 # value maps over the emit's typed columns (see REASONS).
 
@@ -330,7 +330,7 @@ supplements:
       delay_group: "The code's group: passenger, ramp, technical, flight_ops_crew, weather, air_traffic, or reactionary."
       description: "What the code means, as the ops manual words it."
   - name: dim_cancellation_reason
-    description: "The carrier's cancellation-reason categories (DOT-style letter codes). Author-maintained reference data; fact_flight_leg.cancellation_code joins it."
+    description: "The carrier's cancellation-reason categories (DOT-style letter codes). Author-maintained reference data; dim_scheduled_leg.cancellation_code joins it."
     columns:
       cancellation_code: VARCHAR
       label: VARCHAR
