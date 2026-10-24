@@ -30,7 +30,7 @@ from fabulexa_forge._sql import (
     is_recognized_sql_type,
     validate_date_parse_format,
 )
-from fabulexa_forge.anchor import TemporalRender
+from fabulexa_forge.anchor import TemporalGrain, TemporalRender
 
 # ---------------------------------------------------------------------------
 # Identifier validation (author-supplied names spliced into SQL / filenames)
@@ -1738,24 +1738,31 @@ class DimensionalConfig(StrictBaseModel):
 
 
 class RebaseConfig(StrictBaseModel):
-    """Author-chosen wallclock origin and/or zone for timestamp rendering."""
+    """Author-declared rendering clock: wallclock origin, zone, and/or grain."""
 
     base_date: datetime | None = None
     """The wallclock origin to use when converting sim_time values to timestamps."""
     timezone: str | None = None
     """The display/localization timezone applied to rendered timestamps."""
+    grain: TemporalGrain | None = None
+    """The grain election: every rendered temporal value (instant elections,
+    SCD-2 window bounds, streaming's `ts`) truncates its local wall clock to
+    whole seconds / minutes. Absent: the default µs truncation, byte-identical
+    output. Config-only (no CLI flag); a grain with no resolvable anchor
+    refuses (`RebaseOriginUnresolvable`), never a silent no-op."""
 
     @model_validator(mode="after")
     def at_least_one_knob(self) -> Self:
-        """A present `rebase` block sets at least one of base_date / timezone.
+        """A present `rebase` block sets at least one of base_date / timezone
+        / grain.
 
         Raises:
-            ValueError: Both base_date and timezone are absent (empty block).
+            ValueError: All three knobs are absent (empty block).
                 Surfaced by `load_export_config` as `ConfigError`.
         """
-        if self.base_date is None and self.timezone is None:
+        if self.base_date is None and self.timezone is None and self.grain is None:
             raise ValueError(
-                "rebase block must set at least one of base_date / timezone"
+                "rebase block must set at least one of base_date / timezone / grain"
             )
         return self
 

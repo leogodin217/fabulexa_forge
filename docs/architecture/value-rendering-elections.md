@@ -129,7 +129,7 @@ family's contract:
 
 | Condition | Result |
 |---|---|
-| Election present, anchor resolves | The elected rendering via the shared wallclock renderer — identical semantics to a structural instant (DST posture, µs precision, tzdata qualifier) |
+| Election present, anchor resolves | The elected rendering via the shared wallclock renderer — identical semantics to a structural instant (DST posture, µs precision or the anchor's elected grain, tzdata qualifier) |
 | Election present, anchor is `None` | Load/plan-time error — an elected rendering never falls back to raw integers (the explicit-election posture; source's global anchor requirement subsumes this for source) |
 | Source value is `NULL` | `NULL` of the elected type |
 | Source column's declared type is not BIGINT | Plan-time error — the assertion is checkable only against an integer sim-offset column |

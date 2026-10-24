@@ -98,9 +98,48 @@ already can; no new anomaly class exists.
 Contract precision is ns; every rendered temporal value truncates to µs
 (`timestamp`, `time`, `timestamptz`, `interval` alike). `date` truncation is
 the day itself. Sub-µs significance is unspecified by the contract; µs is
-forge's uniform presentation choice. A declared parse obeys the same rule
+forge's uniform presentation choice — electable coarser per export through
+the grain election (below). A declared parse obeys the same rule
 from the other direction: its `TIMESTAMP` and `TIME` denotations carry µs,
 and a `%g` millisecond fraction widens exactly to µs.
+
+### The grain election
+
+`rebase.grain` (`second` | `minute`) elects the clock resolution rendered
+temporal values truncate to; absent, the µs default above holds and output
+is byte-identical. Real operational systems rarely log below the second —
+schedule-driven systems live at the minute — so a uniform µs surface is a
+fast synthetic tell (the dataset-QA finding this election answers).
+
+The election is **per export config, not per column**, and it rides the
+resolved `EffectiveAnchor` (`anchor.py`) into the renderers: it is declared
+in the `rebase:` block beside the origin and zone because it elects a
+property of the one rendering clock — a source system timestamps at its
+clock's resolution, uniformly — not a property of any column. Every surface
+that renders through the anchor coarsens together, with no per-mode wiring:
+
+| Surface | Under a grain |
+|---|---|
+| Instant elections (`timestamp`, `time`, `timestamptz`), every attach point | The local wall clock truncates to the grain (`date_trunc` wrapped by the one shared renderer; the session-zone pin makes the `timestamptz` truncation the same local-wall-clock rule) |
+| `date` | Unaffected — day grain already contains second/minute |
+| `scd_window` bounds | Truncate like any instant; same-grain versions can collapse to `valid_from = valid_to`, exactly the date election's documented posture — raw-ns bounds and version order are unaffected |
+| Streaming `ts` (and playback/mixer `ts`/`_ts`) | `render_ts` truncates the same local wall clock, so the Python-side rendering agrees with the SQL renderers; the full-ns `event_sim_time` key still rides every event |
+| `interval` (elapsed) | Unaffected — a duration is a physical delta, not a clock reading |
+| Declared parse | Unaffected — the parse preserves the source string's own value (Invariant 4); truncating it would fabricate |
+| Supplement cells | Unaffected — author data is cast, never interpreted |
+| Row ordering, gates, window assignment | Unaffected by construction — all order and window math is over raw sim-time keys, never rendered values; coarsening manufactures display ties only |
+
+A grain requires a resolved anchor, structurally: it is a field of the
+anchor, and a `rebase:` block that declares a grain with no resolvable
+origin (no `base_date`, no sidecar runtime) refuses with
+`RebaseOriginUnresolvable` — an election never silently no-ops (the posture
+of Invariant 6). There is no CLI flag: elections are config content.
+
+Truncation is a floor of the **local wall clock** (identical to truncating
+the absolute instant wherever the zone offset is a whole minute — every
+IANA zone in the modern era). The manifest's and fingerprint's serialized
+anchor carries a `grain` key exactly when one is elected, so a grain change
+between incremental windows trips the fingerprint like any config change.
 
 ### Determinism
 
@@ -266,7 +305,8 @@ by construction ([`date-dimension.md`](date-dimension.md)).
    values.
 3. **Family identity.** For any instant, `date` and `time` are pure
    projections of the same local wall clock `timestamp` renders; the three
-   never disagree about what wall clock an instant maps to.
+   never disagree about what wall clock an instant maps to. The identity
+   holds under every grain — all three truncate the same wall clock.
 4. **Faithfulness.** Every elected value traces to base-layer values through
    the same derivations that exist without an election; the election
    changes representation only. The interval's equality to the numeric
@@ -294,6 +334,7 @@ by construction ([`date-dimension.md`](date-dimension.md)).
 |---|---|---|
 | `TemporalRenderRequiresAnchor` | Every explicitly-elected instant rendering (dimensional `as`, `scd_window` object form, source/base `render` entries — payload `instant` elections included, [`value-rendering-elections.md`](value-rendering-elections.md)) has a resolved effective anchor. The source mode's global anchor requirement subsumes its entries; the rule still names the offending column | `"column '{column}': temporal rendering '{render}' requires a resolved anchor; this emit declares no runtime calendar and none was supplied"` |
 | `DateParseSourceColumn` | Each declared parse source resolves per its mode's addressing convention and carries a declared VARCHAR type, and is not `slice_only` | `"date_parse column '{column}' on '{table}': source must be an existing VARCHAR column (got {type})"` |
+| Grain requires an anchor | A `rebase.grain` election resolves to an anchor or refuses: with no origin anywhere (no `base_date`, no sidecar runtime) the anchor resolver raises rather than dropping the election (§ The grain election) | `RebaseOriginUnresolvable`: `"a rebase override was supplied but there is no origin (no base_date and no sidecar anchor)"` |
 | `RenderKeyResolves` | A declared-table or base-entry `render` key resolves in its value form's domain. The bare-shorthand form names an instant-carrying structural column of the table's category (reader-sourced, never hardcoded); the event log's one legal key, `event_sim_time`, is mode-definitional. A key must also name a column the render emits. The typed forms' domains are the value elections' ([`value-rendering-elections.md`](value-rendering-elections.md) § Validation Rules) | `"render key '{column}' on '{table}': not an instant-carrying structural column of this table"` (shorthand form; per-form shapes for the typed forms) |
 | Windowed ordinal invariance (amended) | The delivery classifier's reading is election-aware: an `ordinal.order_by` over the grain's raw time key counts as horizon-invariant only if its rendering is also window-monotone; a `time`-elected column is excluded, so the table is delivered `upsert` rather than `append` — never refused ([`incremental.md`](incremental.md) § Horizon windowing) | — (a classification, not a refusal) |
 
@@ -321,6 +362,21 @@ would let an author silently mangle a sidecar value instead of reshaping it
 — the closed set (instants, durations, declared parses) keeps every
 election a value-preserving re-representation.
 
+**The grain is emit-wide (per config), not per-column.** Three reasons. The
+realism motivation is system-wide: a real source system stamps every
+timestamp at its clock's resolution, so a per-column mix would itself be a
+synthetic tell. Streaming's `ts` has no per-column config surface at all, so
+a per-column grammar could never reach it — the anchor-borne election
+attaches everywhere the clock does, including surfaces (playback, the
+mixer) that have no column grammar. And per-column grain would widen five
+attach-point grammars for a need no QA finding has produced; if one ever
+arrives, a per-column override can be added as a widening without moving
+the config-wide election. Coarsening upstream in the emit was considered
+and rejected cross-repo: the base layer has no rendered timestamps to
+coarsen, and quantizing its ns keys would destroy truth-layer information
+(strictly-increasing history instants) to fix a rendering problem born at
+this seam.
+
 **Never sniffed.** A declared parse requires both the source column
 and the format from the author rather than inferring them from the string
 shape, because the upstream string format is the producer's
@@ -346,13 +402,15 @@ byte-identically for the same election.
 
 ## Boundaries
 
-- **Streaming carries no temporal election.** The streaming mode's payloads
-  are string-typed by codec (JSONL / Debezium carry no SQL type surface) and
-  its `ts` rendering is a separate Python-side contract
+- **Streaming carries no per-column temporal election.** The streaming
+  mode's payloads are string-typed by codec (JSONL / Debezium carry no SQL
+  type surface) and its `ts` rendering is a separate Python-side contract
   ([`streaming.md`](streaming.md)). The numeric value elections do attach
   per stream — they change value text only
   ([`value-rendering-elections.md`](value-rendering-elections.md)
-  § Streaming attach).
+  § Streaming attach). The one temporal election that does reach streaming
+  is the anchor-borne grain (§ The grain election): `ts` truncates to the
+  elected grain because the rendering clock, not a column, carries it.
 - **The parse family covers naive strings only.** There are no zone
   directives (`%z` / `%Z`) and no `timestamptz` denotation: a zone-bearing
   string would need a zone policy for offsets the anchor never saw, and the
@@ -371,7 +429,9 @@ byte-identically for the same election.
 - **Elections do not influence anchor resolution.** Precedence, DST and
   ambiguity rules, and the one-anchor-per-invocation rule are entirely
   the anchor's own ([`anchor.md`](anchor.md)); elections only consume the
-  resolved anchor.
+  resolved anchor. The grain election *rides* the anchor (it is declared in
+  the `rebase:` block and carried on `EffectiveAnchor`) but moves no part of
+  origin or zone resolution.
 
 ## Related
 

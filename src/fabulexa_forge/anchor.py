@@ -29,17 +29,26 @@ if TYPE_CHECKING:
 TemporalRender = Literal["timestamp", "date", "time", "timestamptz"]
 """The instant-rendering election vocabulary, shared by every attach point."""
 
+TemporalGrain = Literal["second", "minute"]
+"""The grain-election vocabulary: the clock resolution every rendered temporal
+value truncates to. No election (None) keeps the default µs truncation."""
+
 
 @dataclass(frozen=True)
 class EffectiveAnchor:
     """The resolved wallclock anchor a single export invocation renders through.
 
     start_instant is the tz-aware datetime that sim_time = 0 maps to; timezone
-    localizes it and governs the zone of every rendered timestamp.
+    localizes it and governs the zone of every rendered timestamp; grain is
+    the elected clock resolution rendered values truncate to (None = the
+    default µs). The grain rides the anchor because it is a property of the
+    one rendering clock, not of any column — every renderer that consumes the
+    anchor coarsens uniformly.
     """
 
     start_instant: datetime  # tz-aware
     timezone: ZoneInfo
+    grain: TemporalGrain | None = None
 
 
 def _resolve_zone(zone_str: str) -> ZoneInfo:
@@ -169,6 +178,13 @@ def resolve_effective_anchor(
     ):
         return None
 
+    # The elected grain (config-only; no CLI surface — elections are config
+    # content). It requires a resolved anchor, which holds by construction:
+    # a grain-bearing rebase block either resolves below or raises.
+    grain: TemporalGrain | None = (
+        config_rebase.grain if config_rebase is not None else None
+    )
+
     # Resolve the winning base_date (CLI wins over config)
     winning_base_date: datetime | None = cli_base_date
     if winning_base_date is None and config_rebase is not None:
@@ -191,11 +207,12 @@ def resolve_effective_anchor(
     # Case: no base_date override — use sidecar origin or detect conflicts
     if winning_base_date is None:
         if sidecar_runtime is None:
-            # No origin anywhere — a timezone override without origin is an error.
-            # (Both winning_base_date and sidecar_runtime are None, so only
-            # winning_tz_str can be non-None; all-None inputs are handled above.)
+            # No origin anywhere — a timezone or grain override without an
+            # origin is an error. (Both winning_base_date and sidecar_runtime
+            # are None, so only winning_tz_str / grain can be non-None;
+            # all-None inputs are handled above.)
             raise RebaseOriginUnresolvable(
-                "a timezone override was supplied but there is no origin"
+                "a rebase override was supplied but there is no origin"
                 " (no base_date and no sidecar anchor)"
             )
 
@@ -208,7 +225,9 @@ def resolve_effective_anchor(
         assert winning_tz_str is not None
         zone = _resolve_zone(winning_tz_str)
         rebased_instant = sidecar_instant.astimezone(zone)
-        return EffectiveAnchor(start_instant=rebased_instant, timezone=zone)
+        return EffectiveAnchor(
+            start_instant=rebased_instant, timezone=zone, grain=grain
+        )
 
     # Case: base_date is set — need a zone
     if winning_tz_str is None:
@@ -219,7 +238,7 @@ def resolve_effective_anchor(
 
     zone = _resolve_zone(winning_tz_str)
     start_instant = _localize(winning_base_date, zone)
-    return EffectiveAnchor(start_instant=start_instant, timezone=zone)
+    return EffectiveAnchor(start_instant=start_instant, timezone=zone, grain=grain)
 
 
 def render_ts(event_sim_time: int, anchor: EffectiveAnchor | None) -> str | int:
@@ -231,7 +250,9 @@ def render_ts(event_sim_time: int, anchor: EffectiveAnchor | None) -> str | int:
     ns offset is truncated to whole microseconds before projection (Python
     datetime precision) — the shipped precision rule every Python-side `ts` /
     `_ts` rendering inherits verbatim, so one instant renders byte-identically
-    everywhere this function is the renderer.
+    everywhere this function is the renderer. An elected anchor grain then
+    truncates the projected local wall clock to whole seconds / minutes — the
+    same local-wall-clock truncation `anchor_temporal_expr` compiles in SQL.
 
     Args:
         event_sim_time: The event sim_time in nanoseconds.
@@ -248,6 +269,10 @@ def render_ts(event_sim_time: int, anchor: EffectiveAnchor | None) -> str | int:
     elapsed_us = event_sim_time // 1000
     instant_utc = utc_origin + timedelta(microseconds=elapsed_us)
     instant_local = instant_utc.astimezone(anchor.timezone)
+    if anchor.grain == "minute":
+        instant_local = instant_local.replace(second=0, microsecond=0)
+    elif anchor.grain == "second":
+        instant_local = instant_local.replace(microsecond=0)
     return instant_local.isoformat()
 
 
@@ -262,7 +287,9 @@ def anchor_temporal_expr(
     today; that function becomes this expression wrapped in `AS
     "<out_name>"` (with its no-anchor pass-through unchanged), so the one
     renderer every wallclock mode shares stays one. The decimal authority's
-    posture: bare expression, caller aliases.
+    posture: bare expression, caller aliases. An elected anchor grain wraps
+    the rendering in a local-wall-clock `date_trunc`; no election compiles
+    byte-identical SQL to before the grain election existed.
 
     Args:
         anchor: The resolved anchor (the no-anchor path never reaches here).
@@ -279,9 +306,16 @@ def anchor_temporal_expr(
         f" + to_microseconds(CAST({qualified_source} AS BIGINT) // 1000)"
     )
     if render == "timestamptz":
+        if anchor.grain is not None:
+            # The session zone is pinned to the anchor zone (reader.md § The
+            # session-zone pin), so this truncates the local wall clock —
+            # identical to the naive family's truncation and to render_ts.
+            return f"date_trunc('{anchor.grain}', {instant_expr})"
         return instant_expr
 
     local_expr = f"timezone('{zone}', {instant_expr})"
+    if anchor.grain is not None:
+        local_expr = f"date_trunc('{anchor.grain}', {local_expr})"
     if render == "date":
         return f"CAST({local_expr} AS DATE)"
     if render == "time":
@@ -337,12 +371,17 @@ def anchor_to_json(anchor: "EffectiveAnchor | None") -> dict[str, str] | None:
         anchor: The resolved anchor, or None.
 
     Returns:
-        `{"start_instant": <ISO-8601>, "timezone": <IANA key>}`, or None when
-        no anchor resolved.
+        `{"start_instant": <ISO-8601>, "timezone": <IANA key>}`, plus a
+        `"grain"` key when a grain is elected (absent otherwise, so a
+        no-election anchor serializes byte-identically to before the grain
+        election existed), or None when no anchor resolved.
     """
     if anchor is None:
         return None
-    return {
+    serialized = {
         "start_instant": anchor.start_instant.isoformat(),
         "timezone": str(anchor.timezone),
     }
+    if anchor.grain is not None:
+        serialized["grain"] = anchor.grain
+    return serialized

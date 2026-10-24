@@ -344,7 +344,8 @@ override) — the fingerprint guards data-seam consistency, and those fields pro
 never affect data, so improving documentation mid-drip must not halt a drip; the
 manifest's embedded config keeps the fields —
 [`companion-artifacts.md`](companion-artifacts.md) § The manifest), the
-resolved anchor (`start_instant` ISO + IANA key, or null), the SHA-256 of `base.json`'s
+resolved anchor (`start_instant` ISO + IANA key, plus `grain` when elected, or
+null), the SHA-256 of `base.json`'s
 bytes, the sole branch's `fork_path`, the `fmt`, and the package version. `--next`
 recomputes it and refuses on mismatch (`IncrementalFingerprintMismatch`): changed
 config, changed rebase flags, a different emit, or a code upgrade mid-drip all halt

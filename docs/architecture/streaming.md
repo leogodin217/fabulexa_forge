@@ -724,8 +724,13 @@ violation (see [`anchor.md`](anchor.md) § Anchored-timestamp rendering and § A
 offset is always the true offset for that instant: a fall-back-fold event renders
 `…+00:00` vs `…+01:00` unambiguously, never a guessed fold. `ts` is never `now()` — it
 is a pure function of `event_sim_time` and the resolved anchor. Anchored `ts` is
-microsecond resolution (Python `datetime`); the full-ns event-time key always remains
-on `event_sim_time` for any consumer needing nanosecond precision.
+microsecond resolution (Python `datetime`), or whole seconds / minutes under the
+anchor's grain election ([`temporal-elections.md`](temporal-elections.md) § The
+grain election) — the one temporal election that reaches streaming, because the
+rendering clock carries it rather than any column. Merge order and `seq` never
+read `ts`, so coarsening manufactures display ties only; the full-ns event-time
+key always remains on `event_sim_time` for any consumer needing nanosecond
+precision.
 
 ### Topics, empty streams, and `route_table`
 

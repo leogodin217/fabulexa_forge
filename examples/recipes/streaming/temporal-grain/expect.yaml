@@ -1,0 +1,15 @@
+streams:
+  patient:
+    event_count: 4
+    contains_events:
+      # Origin 08:30:45 + whole-day offsets would render :45 seconds; the
+      # minute grain truncates them to whole minutes.
+      - seq: 1
+        op: c
+        record_id: p001
+        ts: "2030-06-02T08:30:00+00:00"
+      - seq: 4
+        op: u
+        record_id: p001
+        after.status: discharged
+        ts: "2030-06-04T08:30:00+00:00"

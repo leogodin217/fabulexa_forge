@@ -1620,9 +1620,23 @@ def test_rebase_config_with_both_knobs() -> None:
 
 
 def test_rebase_config_empty_block_rejected() -> None:
-    """rebase: {} (both absent) is rejected by at_least_one_knob."""
+    """rebase: {} (all knobs absent) is rejected by at_least_one_knob."""
     with pytest.raises(ValidationError, match="at least one"):
         RebaseConfig.model_validate({})
+
+
+def test_rebase_config_with_grain_only() -> None:
+    """RebaseConfig with grain only (origin/zone from the sidecar) is valid."""
+    rc = RebaseConfig.model_validate({"grain": "minute"})
+    assert rc.grain == "minute"
+    assert rc.base_date is None
+    assert rc.timezone is None
+
+
+def test_rebase_config_unknown_grain_rejected() -> None:
+    """A grain outside second / minute is rejected at parse."""
+    with pytest.raises(ValidationError):
+        RebaseConfig.model_validate({"grain": "hour"})
 
 
 def test_export_config_without_rebase_loads_cleanly() -> None:
