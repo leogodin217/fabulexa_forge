@@ -47,11 +47,14 @@ The headline derivations:
 
 Things to know before you query:
 
-- **All timestamps are the ops clock.** Every timestamp is local time on the
-  carrier's operations clock (America/Phoenix — no DST, so the daily cadence
-  holds all quarter), recorded at whole-minute resolution. Two events inside
-  the same minute show the same timestamp; sequence within a minute is not
-  recoverable from the timestamps alone.
+- **All timestamps are the ops clock.** Every timestamp is zone-aware
+  (TIMESTAMP WITH TIME ZONE) on the carrier's operations clock
+  (America/New_York), so each value carries its real UTC offset: -05:00
+  (EST) until the DST transition on 2026-03-08, -04:00 (EDT) after it. Date
+  keys are the ops clock's calendar day; derive a station-local date in SQL
+  where you need one. Timestamps are recorded at whole-minute resolution:
+  two events inside the same minute show the same timestamp, and sequence
+  within a minute is not recoverable from the timestamps alone.
 - **Reason codes are a catalogue, not yet a fact column.** `dim_delay_reason`
   (the delay-code list, IATA numbering) and `dim_cancellation_reason` (DOT
   letter categories) are the carrier's reference catalogues, maintained by

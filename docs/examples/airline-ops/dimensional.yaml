@@ -214,15 +214,18 @@
 # emit's own anchor is 2026-01-05T00:00:00 UTC and the tape is 146 days: an
 # eight-week burn-in (so the quarter opens with crew histories, sickness
 # records and paydays already in motion — no cold start) and then the
-# published quarter from 2026-03-02. A US carrier's warehouse reads local
-# time, so the origin is repinned to local midnight in America/Phoenix — a
-# real US ops zone with no DST, so the daily cadence (05:00 musters, duty
-# days, banks) holds the same wall clock all the way instead of jumping an
-# hour at the March DST switch. `grain: minute` truncates every rendered
-# timestamp (and the SCD-2 window bounds) to whole minutes: real ops data is
-# minute-grained at best, and the microsecond surface was round-1 QA's
-# fastest synthetic tell. Raw sim-time ordering and the date keys are
-# untouched — wall-clock digits are preserved by the repin.
+# published quarter from 2026-03-02. The carrier runs on Eastern time, so
+# the origin is repinned to local midnight in America/New_York, and every
+# instant column (and the SCD-2 window bounds) elects `timestamptz`: each
+# value carries its real UTC offset — -05:00 (EST) until the 2026-03-08 DST
+# transition, -04:00 (EDT) after it — the offset pattern a real US ops
+# system shows; a frozen year-round offset was itself a synthetic tell.
+# `grain: minute` truncates every rendered timestamp (and the SCD-2 window
+# bounds) to whole minutes: real ops data is minute-grained at best, and the
+# microsecond surface was round-1 QA's fastest synthetic tell. Raw sim-time
+# ordering is untouched, and the date keys stay anchor-zone-local — the ops
+# clock's calendar day; a station-local date derives in SQL from the
+# upstream per-base timezone property where a consumer needs one.
 # CALENDAR: dim_date spans the whole tape's months, 2026-01-01 ..
 # 2026-05-31, so the burn-in weeks date-join like the quarter and the flu
 # wave and payday cadence read by week/day off the calendar. Every instant
@@ -241,7 +244,7 @@ readme_overlay: README-overlay.md
 
 rebase:
   base_date: 2026-01-05
-  timezone: America/Phoenix
+  timezone: America/New_York
   grain: minute
 
 supplements:
@@ -381,10 +384,10 @@ dimensional:
           from: prop__sickness_episodes
           description: "Sickness episodes recorded against the member up to this version."
         - name: valid_from
-          derived: {scd_window: valid_from}
+          derived: {scd_window: {bound: valid_from, as: timestamptz}}
           description: "When this version of the member became current."
         - name: valid_to
-          derived: {scd_window: valid_to}
+          derived: {scd_window: {bound: valid_to, as: timestamptz}}
           description: "When this version was superseded; NULL on the current version."
 
     # --- dim: the published schedule entry (actor/flight, 2,601 rows) — the
@@ -420,7 +423,7 @@ dimensional:
           from: prop__bank
           description: "Which departure bank the leg is scheduled in: am or pm."
         - name: scheduled_departure_at
-          derived: {timestamp: {source: prop__scheduled_departure}}
+          derived: {timestamp: {source: prop__scheduled_departure, as: timestamptz}}
           description: "The leg's scheduled departure instant — the published bank opening plus the leg's drawn offset, stamped when the bank fires. Pushback delay is the gap from here to wheels-up (the enroute_out entry in fact_lifecycle_state). NULL on a leg still awaiting its bank at quarter end."
         - name: scheduled_departure_date_key
           date_ref: {source: prop__scheduled_departure}
@@ -445,13 +448,13 @@ dimensional:
           from: prop__current_state
           description: "The leg's lifecycle position at the end of the quarter: completed or cancelled for finished legs; the in-flight stage (scheduled, dispatching, crewing_captain, crewing_fo, boarding, enroute_out, outstation_turn, enroute_in, turnaround, fault_hold) for the few still in motion."
         - name: entered_schedule_at
-          derived: {timestamp: {source: created_sim_time}}
+          derived: {timestamp: {source: created_sim_time, as: timestamptz}}
           description: "When the leg entered the published schedule."
         - name: entered_schedule_date_key
           date_ref: {source: created_sim_time}
           description: "dim_date.date_key of the day the leg entered the published schedule."
         - name: closed_at
-          derived: {timestamp: {source: deactivated_at}}
+          derived: {timestamp: {source: deactivated_at, as: timestamptz}}
           description: "When the leg closed out (completed or cancelled); NULL for legs still in motion at quarter end."
         - name: closed_date_key
           date_ref: {source: deactivated_at}
@@ -487,13 +490,13 @@ dimensional:
           from: value
           description: "The state occupied: e.g. boarding, enroute_out, outstation_turn, enroute_in for flight; on_duty, off_duty, day_off, pulled_back for roster; well, sick for sickness; active, serving_notice for employment."
         - name: entered_at
-          derived: {timestamp: {source: sim_time}}
+          derived: {timestamp: {source: sim_time, as: timestamptz}}
           description: "When the subject entered this state."
         - name: entered_date_key
           date_ref: {source: sim_time}
           description: "dim_date.date_key of the day the subject entered this state."
         - name: exited_at
-          derived: {timestamp: {source: lead_sim_time}}
+          derived: {timestamp: {source: lead_sim_time, as: timestamptz}}
           description: "When the subject left this state; NULL on the state it was still in at quarter end."
         - name: exited_date_key
           date_ref: {source: lead_sim_time}
@@ -517,7 +520,7 @@ dimensional:
           fk: {to: dim_crew_member, via: reference, path: [prop__journey_instance, prop__actor]}
           description: "The member paid; joins dim_crew_member.crew_code."
         - name: paid_at
-          derived: {timestamp: {source: created_sim_time}}
+          derived: {timestamp: {source: created_sim_time, as: timestamptz}}
           description: "When the pay packet landed."
         - name: paid_date_key
           date_ref: {source: created_sim_time}
@@ -543,13 +546,13 @@ dimensional:
           fk: {to: dim_aircraft, via: reference}
           description: "The tail assigned to the leg; joins dim_aircraft.aircraft_key (read tail_number off the dim)."
         - name: assigned_at
-          derived: {timestamp: {source: joined_sim_time}}
+          derived: {timestamp: {source: joined_sim_time, as: timestamptz}}
           description: "When the tail was granted to the leg at dispatch."
         - name: assigned_date_key
           date_ref: {source: joined_sim_time}
           description: "dim_date.date_key of the day the tail was granted to the leg."
         - name: released_at
-          derived: {timestamp: {source: left_sim_time}}
+          derived: {timestamp: {source: left_sim_time, as: timestamptz}}
           description: "When the tail was released after the turnaround (or after repair); NULL if the leg still held it at quarter end."
         - name: released_date_key
           date_ref: {source: left_sim_time}
@@ -597,13 +600,13 @@ dimensional:
                 "flight:recover_fo:fo_recovered": reserve_callout
           description: "How the member came aboard: scheduled boarding, or a reserve callout after the seat's original member was pulled mid-block."
         - name: boarded_at
-          derived: {timestamp: {source: joined_sim_time}}
+          derived: {timestamp: {source: joined_sim_time, as: timestamptz}}
           description: "When the member came aboard the leg."
         - name: boarded_date_key
           date_ref: {source: joined_sim_time}
           description: "dim_date.date_key of the day the member came aboard."
         - name: released_at
-          derived: {timestamp: {source: left_sim_time}}
+          derived: {timestamp: {source: left_sim_time, as: timestamptz}}
           description: "When the member was released at the end of the block — or pulled mid-block by sickness; NULL if still aboard at quarter end."
         - name: released_date_key
           date_ref: {source: left_sim_time}
@@ -649,13 +652,13 @@ dimensional:
                 "flight:recover_fo:fo_recovered": reserve_fo
           description: "What the leg was waiting for: a free tail, a lineholder captain or first officer, or a reserve callout for the lost seat."
         - name: queued_from
-          derived: {timestamp: {source: joined_sim_time}}
+          derived: {timestamp: {source: joined_sim_time, as: timestamptz}}
           description: "When the leg joined the queue."
         - name: queued_date_key
           date_ref: {source: joined_sim_time}
           description: "dim_date.date_key of the day the leg joined the queue."
         - name: granted_at
-          derived: {timestamp: {source: left_sim_time}}
+          derived: {timestamp: {source: left_sim_time, as: timestamptz}}
           description: "When the wait ended (grant, or the leg gave up and cancelled); NULL if still queued at quarter end."
         - name: granted_date_key
           date_ref: {source: left_sim_time}
@@ -681,13 +684,13 @@ dimensional:
           lookup: {property: base}
           description: "Which base the member was reclaiming their station at: CVG or SLC."
         - name: queued_from
-          derived: {timestamp: {source: joined_sim_time}}
+          derived: {timestamp: {source: joined_sim_time, as: timestamptz}}
           description: "When the member's duty day ended and they began waiting to stand down."
         - name: queued_date_key
           date_ref: {source: joined_sim_time}
           description: "dim_date.date_key of the day the wait began."
         - name: released_at
-          derived: {timestamp: {source: left_sim_time}}
+          derived: {timestamp: {source: left_sim_time, as: timestamptz}}
           description: "When the member reclaimed their station and stood down; NULL if still waiting at quarter end."
         - name: released_date_key
           date_ref: {source: left_sim_time}
@@ -721,13 +724,13 @@ dimensional:
           from: elem__status
           description: "Whether the claim was occupying the member or still waiting for them (a muster report queued behind a sick episode)."
         - name: started_at
-          derived: {timestamp: {source: joined_sim_time}}
+          derived: {timestamp: {source: joined_sim_time, as: timestamptz}}
           description: "When the claim began."
         - name: started_date_key
           date_ref: {source: joined_sim_time}
           description: "dim_date.date_key of the day the claim began."
         - name: ended_at
-          derived: {timestamp: {source: left_sim_time}}
+          derived: {timestamp: {source: left_sim_time, as: timestamptz}}
           description: "When the claim ended; NULL if still open at quarter end."
         - name: ended_date_key
           date_ref: {source: left_sim_time}

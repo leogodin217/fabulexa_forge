@@ -52,7 +52,7 @@
 #   SCHED   flight_leg.scheduled_departure is the producer's sim-instant
 #           stamp (BIGINT ns; value == the depart firing's clock.now,
 #           verified on all 2,597 stamps). The `render:` election
-#           ({instant: timestamp}) puts it on the same ops clock as the
+#           ({instant: timestamptz}) puts it on the same ops clock as the
 #           structural columns, so delay vs plan is computable in the DB;
 #           NULL on the 4 legs still awaiting their bank at tape's end.
 #   PAYDAY  v2's instantaneous payday never lands in the lifecycle history
@@ -136,20 +136,22 @@
 # emit's own anchor is 2026-01-05T00:00:00 UTC and the tape is 146 days: an
 # eight-week burn-in (the quarter opens with crew histories, sickness
 # records and paydays already in motion) and then the published quarter from
-# 2026-03-02. A US carrier's ops system stamps local time, so the origin is
-# repinned to local midnight in America/Phoenix — a real US ops zone with no
-# DST, so the daily cadence (05:00 musters, duty days, banks) holds the same
-# wall clock all the way instead of jumping an hour at the March DST switch.
-# `grain: minute` truncates every rendered timestamp to whole minutes: real
-# ops systems are minute-grained at best, and the microsecond surface was
-# round-1 QA's fastest synthetic tell. Raw sim-time keys (and ordering) are
-# untouched.
+# 2026-03-02. The carrier runs on Eastern time, so the origin is repinned to
+# local midnight in America/New_York, and every instant column — the state
+# tables' lifecycle stamps, the junctions' interval bounds, the audit log's
+# occurred_at — elects `timestamptz`: each value carries its real UTC
+# offset, -05:00 (EST) until the 2026-03-08 DST transition and -04:00 (EDT)
+# after it, the offset pattern a real US ops database shows (a frozen
+# year-round offset was itself a synthetic tell). `grain: minute` truncates
+# every rendered timestamp to whole minutes: real ops systems are
+# minute-grained at best, and the microsecond surface was round-1 QA's
+# fastest synthetic tell. Raw sim-time keys (and ordering) are untouched.
 
 mode: source
 
 rebase:
   base_date: 2026-01-05
-  timezone: America/Phoenix
+  timezone: America/New_York
   grain: minute
 
 keys:
@@ -191,6 +193,10 @@ source:
         prop__shift: shift
         prop__status: status
         prop__sickness_episodes: sickness_episodes
+      render:
+        created_sim_time: timestamptz
+        deactivated_at: timestamptz
+        last_mutation_sim_time: timestamptz
       descriptions:
         presentation_id: "The member's staff code (CRW-nnnn); the table's key."
         created_sim_time: "When the member joined the payroll."
@@ -224,7 +230,10 @@ source:
         prop__bank: departure_bank
         prop__scheduled_departure: scheduled_departure
       render:
-        prop__scheduled_departure: {instant: timestamp}
+        created_sim_time: timestamptz
+        deactivated_at: timestamptz
+        last_mutation_sim_time: timestamptz
+        prop__scheduled_departure: {instant: timestamptz}
       descriptions:
         presentation_id: "The leg's operational code (LEG-nnnnn), unique for the quarter; the table's key."
         created_sim_time: "When the leg entered the published schedule."
@@ -254,6 +263,10 @@ source:
         prop__class_from_slc: route_class_from_slc
         prop__popularity_cvg: popularity_cvg
         prop__popularity_slc: popularity_slc
+      render:
+        created_sim_time: timestamptz
+        deactivated_at: timestamptz
+        last_mutation_sim_time: timestamptz
       descriptions:
         record_index: "Unique numeric identifier for the airport, assigned in creation order."
         created_sim_time: "When the airport entered the carrier's network."
@@ -280,6 +293,10 @@ source:
         prop__base: base
         prop__capacity: capacity
         prop__allocated: allocated
+      render:
+        created_sim_time: timestamptz
+        deactivated_at: timestamptz
+        last_mutation_sim_time: timestamptz
       descriptions:
         record_index: "Unique numeric identifier for the tail, assigned in creation order."
         created_sim_time: "When the tail joined the fleet."
@@ -307,6 +324,10 @@ source:
         prop__owner: crew_member_id
         prop__capacity: capacity
         prop__allocated: allocated
+      render:
+        created_sim_time: timestamptz
+        deactivated_at: timestamptz
+        last_mutation_sim_time: timestamptz
       descriptions:
         presentation_id: "The station's code (DS-nnnn); the table's key."
         created_sim_time: "When the station was minted (at its member's induction, or at genesis)."
@@ -333,6 +354,10 @@ source:
         prop__discipline: discipline
         prop__on_full: on_full
         prop__base: base
+      render:
+        created_sim_time: timestamptz
+        deactivated_at: timestamptz
+        last_mutation_sim_time: timestamptz
       descriptions:
         record_index: "Unique numeric identifier for the pool, assigned in creation order."
         created_sim_time: "When the pool was configured (at genesis)."
@@ -355,6 +380,10 @@ source:
         prop__actor: subject_id
         prop__journey_type: process
         prop__current_state: current_state
+      render:
+        created_sim_time: timestamptz
+        deactivated_at: timestamptz
+        last_mutation_sim_time: timestamptz
       descriptions:
         record_index: "Unique numeric identifier for the lifecycle record, assigned in creation order."
         created_sim_time: "When the lifecycle began."
@@ -373,6 +402,8 @@ source:
       rename:
         created_sim_time: paid_at
         prop__journey_instance: lifecycle_id
+      render:
+        created_sim_time: timestamptz
       descriptions:
         record_index: "Unique numeric identifier for the payslip, assigned in creation order."
         created_sim_time: "When the pay packet landed."
@@ -389,6 +420,9 @@ source:
         joined_sim_time: held_from
         left_sim_time: released_at
         elem__claim: claim
+      render:
+        joined_sim_time: timestamptz
+        left_sim_time: timestamptz
       descriptions:
         record_id: "The tail being held; joins aircraft.id."
         member__actor__id: "The leg holding the tail; joins flight_leg.id (its LEG-nnnnn code)."
@@ -407,6 +441,9 @@ source:
         joined_sim_time: held_from
         left_sim_time: released_at
         elem__claim: claim
+      render:
+        joined_sim_time: timestamptz
+        left_sim_time: timestamptz
       descriptions:
         record_id: "The duty station being held; joins duty_station.id (its DS-nnnn code)."
         member__actor__id: "Who holds it: a leg (flight claims, LEG-nnnnn) or the station's own member (roster claims, CRW-nnnn); joins flight_leg.id or crew_member.id by claim."
@@ -426,6 +463,9 @@ source:
         left_sim_time: resolved_at
         elem__on_acquired_rule: awaiting
         elem__priority: priority
+      render:
+        joined_sim_time: timestamptz
+        left_sim_time: timestamptz
       descriptions:
         record_id: "The pool queued at; joins dispatch_pool.id."
         member__actor__id: "The waiting leg (LEG-nnnnn) or crew member (CRW-nnnn); joins flight_leg.id or crew_member.id by the awaiting rule."
@@ -444,6 +484,9 @@ source:
         left_sim_time: ended_at
         elem__claim: claim
         elem__status: status
+      render:
+        joined_sim_time: timestamptz
+        left_sim_time: timestamptz
       descriptions:
         record_id: "The member whose presence is claimed; joins crew_member.id (their staff code)."
         joined_sim_time: "When the claim began."
@@ -463,6 +506,9 @@ source:
         member__entity__id: participant_id
         joined_sim_time: bound_from
         left_sim_time: unbound_at
+      render:
+        joined_sim_time: timestamptz
+        left_sim_time: timestamptz
       descriptions:
         record_id: "The process instance the role is bound on; joins lifecycle.id."
         elem__role_name: "The role filled: dest, tail, captain_seat, fo_seat, or the roster roles closed_sign / my_station / new_station."
@@ -473,6 +519,8 @@ source:
 
   events:
     name: audit_log
+    render:
+      event_sim_time: timestamptz
     sources:
       - kind: actor
         sub_types: [crew]
