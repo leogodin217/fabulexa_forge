@@ -354,8 +354,19 @@ idiom. Fixed columns; the author names the table, not the columns:
 
 **The audited property set** per source: every `tracked` and `constant`-class
 property of the kind (the temporally honest set — `slice_only` is
-policy-omitted), narrowed by `only` or widened-by-subtraction via `ignore`
-(mutually exclusive). The folds' selected-property set *is* the audited set,
+policy-omitted) **attributed to the source's addressed sub-types** by the
+sidecar's `sub_type_columns` partition, narrowed by `only` or
+widened-by-subtraction via `ignore` (mutually exclusive). A sub-typed kind's
+records table materializes the union of every sub-type's columns, so without
+the partition narrowing a sub-type-narrowed source would carry other
+sub-types' structurally inapplicable fields as `[null, null]` changeset
+entries — one bled dictionary across item-types instead of per-item-type
+changesets. The narrowing is the union over the source's addressed atoms,
+silent (a structurally inapplicable column carries no data for the addressed
+sub-types, so nothing is lost), with the kind-wide discriminator kept despite
+the partition's carve-out; an `only` entry is the author's explicit audited
+set and overrides it; absent the partition (an older emit, a flat kind, an
+uncovered address) the union-schema behaviour is preserved exactly. The folds' selected-property set *is* the audited set,
 `history_tracked` or not: a tracked-flagged property reads as-of each event from
 its history rows; an untracked `constant`-class property renders the current
 spine value in every after-image (the folds' type-1 path) — temporally honest

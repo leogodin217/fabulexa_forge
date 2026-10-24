@@ -767,6 +767,172 @@ def test_audited_set_membership_element_fields(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
+# `events`: audited-set partition narrowing (sub_type_columns)
+# ---------------------------------------------------------------------------
+
+
+def build_partitioned_audit_emit(
+    tmp_path: Path, *, with_partition: bool = True
+) -> Path:
+    """A sub-typed kind (a/b/c) carrying a `sub_type_columns` partition:
+    `name` structural (every sub-type's list), `alpha` / `beta` / `gamma`
+    declared by one sub-type each, the discriminator in no list (contract
+    carve-out). The audited-set partition-narrowing fixture;
+    `with_partition=False` writes the same kind without the block
+    (union-schema fallback)."""
+    columns = [
+        identity_column("fork_path", "VARCHAR"),
+        identity_column("record_id", "VARCHAR"),
+        *_LIFECYCLE_COLUMNS,
+        identity_column("record_index", "BIGINT"),
+        prop_column(
+            "prop__gizmo_type",
+            "VARCHAR",
+            history_tracked=False,
+            temporal_class="constant",
+        ),
+        prop_column(
+            "prop__name", "VARCHAR", history_tracked=False, temporal_class="constant"
+        ),
+        prop_column(
+            "prop__alpha", "VARCHAR", history_tracked=False, temporal_class="constant"
+        ),
+        prop_column(
+            "prop__beta", "VARCHAR", history_tracked=False, temporal_class="constant"
+        ),
+        prop_column(
+            "prop__gamma", "VARCHAR", history_tracked=False, temporal_class="constant"
+        ),
+    ]
+    table = {
+        "name": "records__gizmo",
+        "category": "records",
+        "record_kind": "gizmo",
+        "columns": columns,
+        "rows": 0,
+    }
+    extra: dict[str, object] = {
+        "enum_domains": {"gizmo": {"gizmo_type": enum_options("a", "b", "c")}},
+    }
+    if with_partition:
+        extra["sub_type_columns"] = {
+            "gizmo": {
+                "a": ["prop__name", "prop__alpha"],
+                "b": ["prop__name", "prop__beta"],
+                "c": ["prop__name", "prop__gamma"],
+            }
+        }
+    return _write_bare_emit(tmp_path, table, extra=extra)
+
+
+def _gizmo_events_plan(
+    tmp_path: Path,
+    sources: tuple[SourceEventSourceDecl, ...],
+    *,
+    with_partition: bool = True,
+) -> "SourcePlan":
+    """Build an events-only plan over the partitioned-audit fixture."""
+    return _open_plan(
+        build_partitioned_audit_emit(tmp_path, with_partition=with_partition),
+        _config(events=SourceEventsDecl(name="audit_log", sources=sources)),
+    )
+
+
+def test_audited_set_narrows_to_addressed_sub_types_attribution(
+    tmp_path: Path,
+) -> None:
+    """A sub-type-narrowed source audits only the columns the partition
+    attributes to its addressed sub-types — structural `name`, its own
+    `alpha`, and the kind-wide discriminator (kept despite the carve-out) —
+    never another sub-type's structurally inapplicable fields."""
+    plan = _gizmo_events_plan(
+        tmp_path, (SourceEventSourceDecl(kind="gizmo", sub_types=("a",)),)
+    )
+    assert plan.events is not None
+    assert plan.events.sources[0].audited_properties == (
+        ("gizmo_type", "gizmo_type"),
+        ("name", "name"),
+        ("alpha", "alpha"),
+    )
+
+
+def test_audited_set_cross_sub_type_fields_never_bleed(tmp_path: Path) -> None:
+    """Two sources over disjoint sub-types each carry their own changeset
+    dictionary; a sub-type nobody addresses contributes its column (`gamma`)
+    to neither — the phantom-key shape."""
+    plan = _gizmo_events_plan(
+        tmp_path,
+        (
+            SourceEventSourceDecl(kind="gizmo", sub_types=("a",)),
+            SourceEventSourceDecl(kind="gizmo", sub_types=("b",)),
+        ),
+    )
+    assert plan.events is not None
+    audited_a = [bare for bare, _out in plan.events.sources[0].audited_properties]
+    audited_b = [bare for bare, _out in plan.events.sources[1].audited_properties]
+    assert "beta" not in audited_a and "gamma" not in audited_a
+    assert "alpha" not in audited_b and "gamma" not in audited_b
+
+
+def test_audited_set_full_domain_address_is_the_union(tmp_path: Path) -> None:
+    """A source addressing the whole sub-typed kind audits the union of
+    every sub-type's attribution — the partition narrows nothing."""
+    plan = _gizmo_events_plan(tmp_path, (SourceEventSourceDecl(kind="gizmo"),))
+    assert plan.events is not None
+    assert plan.events.sources[0].audited_properties == (
+        ("gizmo_type", "gizmo_type"),
+        ("name", "name"),
+        ("alpha", "alpha"),
+        ("beta", "beta"),
+        ("gamma", "gamma"),
+    )
+
+
+def test_audited_set_partition_absent_falls_back_to_union(tmp_path: Path) -> None:
+    """Without a `sub_type_columns` block, a sub-type-narrowed source keeps
+    the union-schema behaviour (an older emit)."""
+    plan = _gizmo_events_plan(
+        tmp_path,
+        (SourceEventSourceDecl(kind="gizmo", sub_types=("a",)),),
+        with_partition=False,
+    )
+    assert plan.events is not None
+    assert plan.events.sources[0].audited_properties == (
+        ("gizmo_type", "gizmo_type"),
+        ("name", "name"),
+        ("alpha", "alpha"),
+        ("beta", "beta"),
+        ("gamma", "gamma"),
+    )
+
+
+def test_audited_set_only_overrides_partition_narrowing(tmp_path: Path) -> None:
+    """An `only` entry is the author's explicit audited set: a named
+    property outside the addressed sub-types' attribution stays audited."""
+    plan = _gizmo_events_plan(
+        tmp_path,
+        (SourceEventSourceDecl(kind="gizmo", sub_types=("a",), only=("beta",)),),
+    )
+    assert plan.events is not None
+    assert plan.events.sources[0].audited_properties == (("beta", "beta"),)
+
+
+def test_audited_set_ignore_composes_with_partition_narrowing(
+    tmp_path: Path,
+) -> None:
+    """`ignore` subtracts from the partition-narrowed set."""
+    plan = _gizmo_events_plan(
+        tmp_path,
+        (SourceEventSourceDecl(kind="gizmo", sub_types=("a",), ignore=("alpha",)),),
+    )
+    assert plan.events is not None
+    assert plan.events.sources[0].audited_properties == (
+        ("gizmo_type", "gizmo_type"),
+        ("name", "name"),
+    )
+
+
+# ---------------------------------------------------------------------------
 # Records-column taxonomy: unclassified column
 # ---------------------------------------------------------------------------
 
