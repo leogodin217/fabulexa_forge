@@ -29,6 +29,12 @@
 #                   (source.yaml ships them as dispatch_pool, where
 #                   pool_wait joins them).
 #
+# KEYS: declare_keys emits PK/UNIQUE constraints into the DuckDB dump,
+# resolved from the sidecar's presentation_keys registry — round-1 QA read a
+# keyless dump. Base is the kind-shaped raw landing dump, so `record_index`
+# stays a column here by design; the curated exports are where the engine's
+# counters stop surfacing.
+#
 # TIMESTAMPS: no `rebase:` is declared, but lifecycle columns still land as
 # wallclock TIMESTAMPs — the sidecar carries a `runtime` anchor
 # (2026-03-02T00:00:00 UTC) and base renders through the effective anchor.
@@ -42,6 +48,8 @@
 mode: base
 
 base:
+  declare_keys: true
+
   exclude:
     kinds: [tick_decision, queue]
 
@@ -58,14 +66,20 @@ base:
         prop__seat: seat
         prop__role: role
         prop__constitution: constitution
+        prop__first_name: first_name
+        prop__last_name: last_name
+        prop__full_name: full_name
         prop__status: status
         prop__sickness_episodes: sickness_episodes
         prop__bank: departure_bank
-        prop__route_class: route_class
+        prop__destination: destination_id
+        ref_index__destination: destination_key
+        prop__flight_number: flight_number
+        prop__route_number: route_number
       descriptions:
         record_id: "Unique identifier for the crew member or leg."
         record_index: "Unique numeric key, assigned in creation order across both unit types."
-        presentation_id: "The unit's public code: CRW-nnnn for a crew member, FXnnnn for a flight leg."
+        presentation_id: "The unit's public code: CRW-nnnn for a crew member, LEG-nnnnn for a flight leg."
         created_sim_time: "When the unit entered the system — payroll start for a crew member, schedule entry for a leg."
         active: "TRUE while the unit is live; FALSE once a crew member resigned or a leg closed out."
         deactivated_at: "When the unit closed; NULL while live."
@@ -74,10 +88,16 @@ base:
         prop__seat: "Crew rows: the seat the member is rated for (captain or fo); NULL on leg rows."
         prop__role: "Crew rows: lineholder or reserve; NULL on leg rows."
         prop__constitution: "Crew rows: the generator's sickness-propensity class (robust, typical, fragile); NULL on leg rows. A simulation input, carried verbatim by this raw dump — the curated exports drop it."
+        prop__first_name: "Crew rows: the member's given name; NULL on leg rows."
+        prop__last_name: "Crew rows: the member's family name; NULL on leg rows."
+        prop__full_name: "Crew rows: the member's display name; NULL on leg rows."
         prop__status: "Crew rows: HR status (onboarding, active, notice, resigned); NULL on leg rows."
         prop__sickness_episodes: "Crew rows: sickness episodes recorded to date; NULL on leg rows."
         prop__bank: "Leg rows: departure bank (am or pm); NULL on crew rows."
-        prop__route_class: "Leg rows: haul class (short, medium, long); NULL on crew rows."
+        prop__destination: "Leg rows: the planned destination, drawn at schedule entry; joins destination.id. NULL on crew rows."
+        ref_index__destination: "Leg rows: numeric key of the planned destination; joins destination.destination_key. NULL on crew rows."
+        prop__flight_number: "Leg rows: the published flight number (FXnnn), one per (departure bank, destination) pair and reused across the quarter; NULL on crew rows."
+        prop__route_number: "Leg rows: the carrier's route number for the destination (shared by the am and pm services); NULL on crew rows."
 
     - table: records__entity
       name: destination
