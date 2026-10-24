@@ -3,10 +3,11 @@
 # `fabulexa-forge export docs/examples/airline-ops/bundle docs/examples/airline-ops/base.yaml <out> --fmt duckdb`
 #
 # Base mode reconstructs one flat table per records kind at the tape's end:
-# every tracked property (crew status and sickness count, lifecycle
-# current_state, the pools' capacity/allocated) carries its LATEST history
-# value. No sub-type split, no FK resolution — the faithful "current state of
-# every record" landing shape. `record_id` presents as `id`.
+# every tracked property (crew status and sickness count, the legs' stamped
+# scheduled departure, lifecycle current_state, the pools' capacity/allocated)
+# carries its LATEST history value. No sub-type split, no FK resolution — the
+# faithful "current state of every record" landing shape. `record_id`
+# presents as `id`.
 #
 # Two author decisions here: which kinds to drop, and what everything is
 # CALLED. The `rename` entries below relabel every table and column into the
@@ -16,18 +17,20 @@
 # by `asset_type` — lands as `asset` (the same words source.yaml's
 # kind_labels use).
 #
-# We exclude the two simulation-MECHANISM kinds:
-#   tick_decision — the engine's decision log. `prop__context` is the empty
-#                   JSON object on all 10,537 rows (measured), and every
-#                   decision_type mirrors a lifecycle state entry the
-#                   lifecycle table's history already drove. An audit trail
-#                   of the simulator, not the carrier.
-#   queue         — the four per-base pool-config records. The waits they
-#                   govern are domain-real, but membership tables are not
-#                   part of base's records-kind dump either way, and the
-#                   config rows alone carry no current-state value here
-#                   (source.yaml ships them as dispatch_pool, where
-#                   pool_wait joins them).
+# We exclude ONE simulation-mechanism kind:
+#   queue — the four per-base pool-config records. The waits they govern are
+#           domain-real, but membership tables are not part of base's
+#           records-kind dump either way, and the config rows alone carry no
+#           current-state value here (source.yaml ships them as
+#           dispatch_pool, where pool_wait joins them).
+# tick_decision STAYS since realism v2 (as decision_log): it used to be a
+# pure mirror of the lifecycle history, but the v2 payday is instantaneous —
+# an instantaneous state never lands in the history (active -> payday ->
+# active at one instant collapses to no change) — so the engine's 408
+# payslip_issued decisions are the pay cadence's only surface. The other
+# seven decision types still mirror lifecycle entries, and `context` is the
+# empty JSON object on all 10,952 rows (measured); a raw landing dump
+# carries the log whole rather than second-guessing which rows matter.
 #
 # KEYS: declare_keys emits PK/UNIQUE constraints into the DuckDB dump,
 # resolved from the sidecar's presentation_keys registry — round-1 QA read a
@@ -37,13 +40,18 @@
 #
 # TIMESTAMPS: lifecycle columns land as wallclock TIMESTAMPs through the
 # `rebase:` block below — the carrier's operations clock. The emit's own
-# anchor is 2026-03-02T00:00:00 UTC; the origin is repinned to local midnight
-# in America/Phoenix (a real US ops zone with no DST, so the daily cadence
-# holds the same wall clock all quarter), and `grain: minute` truncates every
-# rendered timestamp to whole minutes — real ops systems are minute-grained
-# at best, and the microsecond surface was round-1 QA's fastest synthetic
-# tell. The same clock is declared in all four configs. Domain `prop__`
-# columns are presentation-verbatim at their declared types.
+# anchor is 2026-01-05T00:00:00 UTC and the tape is 146 days: an eight-week
+# burn-in and then the published quarter from 2026-03-02. The origin is
+# repinned to local midnight in America/Phoenix (a real US ops zone with no
+# DST, so the daily cadence holds the same wall clock all the way), and
+# `grain: minute` truncates every rendered timestamp to whole minutes — real
+# ops systems are minute-grained at best, and the microsecond surface was
+# round-1 QA's fastest synthetic tell. The same clock is declared in all
+# four configs. Domain `prop__` columns are presentation-verbatim at their
+# declared types, with ONE render election: the legs' `scheduled_departure`
+# is the producer's sim-instant stamp (BIGINT ns on the tape's clock), and
+# `{instant: timestamp}` puts it on the same ops clock as the structural
+# columns instead of leaving a raw nanosecond offset in the dump.
 #
 # SLICE_ONLY: every non-exempt `temporal_class: slice_only` column is
 # auto-omitted export-wide with a notice — here actor has none, resource
@@ -53,7 +61,7 @@
 mode: base
 
 rebase:
-  base_date: 2026-03-02
+  base_date: 2026-01-05
   timezone: America/Phoenix
   grain: minute
 
@@ -61,7 +69,12 @@ base:
   declare_keys: true
 
   exclude:
-    kinds: [tick_decision, queue]
+    kinds: [queue]
+
+  render:
+    - table: records__actor
+      render:
+        prop__scheduled_departure: {instant: timestamp}
 
   rename:
     - table: records__actor
@@ -75,6 +88,7 @@ base:
         prop__base: base
         prop__seat: seat
         prop__role: role
+        prop__shift: shift
         prop__constitution: constitution
         prop__first_name: first_name
         prop__last_name: last_name
@@ -82,6 +96,7 @@ base:
         prop__status: status
         prop__sickness_episodes: sickness_episodes
         prop__bank: departure_bank
+        prop__scheduled_departure: scheduled_departure
         prop__destination: destination_id
         ref_index__destination: destination_key
         prop__flight_number: flight_number
@@ -94,9 +109,10 @@ base:
         active: "TRUE while the unit is live; FALSE once a crew member resigned or a leg closed out."
         deactivated_at: "When the unit closed; NULL while live."
         prop__actor_type: "Whether this row is a crew member or a flight leg."
-        prop__base: "Station the unit belongs to: east or west."
+        prop__base: "Station the unit belongs to: CVG or SLC."
         prop__seat: "Crew rows: the seat the member is rated for (captain or fo); NULL on leg rows."
         prop__role: "Crew rows: lineholder or reserve; NULL on leg rows."
+        prop__shift: "Crew rows: the report window the member musters in (early or late); NULL on leg rows."
         prop__constitution: "Crew rows: the generator's sickness-propensity class (robust, typical, fragile); NULL on leg rows. A simulation input, carried verbatim by this raw dump — the curated exports drop it."
         prop__first_name: "Crew rows: the member's given name; NULL on leg rows."
         prop__last_name: "Crew rows: the member's family name; NULL on leg rows."
@@ -104,6 +120,7 @@ base:
         prop__status: "Crew rows: HR status (onboarding, active, notice, resigned); NULL on leg rows."
         prop__sickness_episodes: "Crew rows: sickness episodes recorded to date; NULL on leg rows."
         prop__bank: "Leg rows: departure bank (am or pm); NULL on crew rows."
+        prop__scheduled_departure: "Leg rows: the scheduled departure instant, stamped when the leg's bank fires — pushback delay is anything after it; NULL on crew rows and on a leg still awaiting its bank."
         prop__destination: "Leg rows: the planned destination, drawn at schedule entry; joins destination.id. NULL on crew rows."
         ref_index__destination: "Leg rows: numeric key of the planned destination; joins destination.destination_key. NULL on crew rows."
         prop__flight_number: "Leg rows: the published flight number (FXnnn), one per (departure bank, destination) pair and reused across the quarter; NULL on crew rows."
@@ -111,15 +128,17 @@ base:
 
     - table: records__entity
       name: destination
-      description: "An airport the carrier serves — the catalogue legs plan destinations from."
+      description: "An airport the carrier serves — the catalogue legs plan destinations from. Haul class and demand weighting are facts of the city pair, one column per origin base."
       columns:
         record_index: destination_key
         created_sim_time: created_at
         prop__entity_type: destination_type
         prop__code: airport_code
         prop__city: city
-        prop__route_class: route_class
-        prop__popularity: popularity
+        prop__class_from_cvg: route_class_from_cvg
+        prop__class_from_slc: route_class_from_slc
+        prop__popularity_cvg: popularity_cvg
+        prop__popularity_slc: popularity_slc
       descriptions:
         record_id: "Unique identifier for the airport."
         record_index: "Unique numeric key for the airport, assigned in creation order."
@@ -127,10 +146,12 @@ base:
         active: "TRUE while the airport is served."
         deactivated_at: "When the airport left the network; NULL while served."
         prop__entity_type: "What kind of catalogue row this is; every row here is a destination."
-        prop__code: "IATA-style three-letter airport code."
+        prop__code: "IATA three-letter airport code."
         prop__city: "City the airport serves."
-        prop__route_class: "Haul class of routes to this airport: short, medium, or long."
-        prop__popularity: "Relative demand weighting (1-5) used when legs plan a destination."
+        prop__class_from_cvg: "Haul class of the CVG service to this airport: short, medium, or long. Class is a fact of the city pair — SEA is long from CVG but medium from SLC."
+        prop__class_from_slc: "Haul class of the SLC service to this airport: short, medium, or long."
+        prop__popularity_cvg: "Relative demand weighting used when CVG legs plan a destination."
+        prop__popularity_slc: "Relative demand weighting used when SLC legs plan a destination."
 
     - table: records__journey_instance
       name: lifecycle
@@ -180,7 +201,7 @@ base:
         deactivated_at: "When the asset was retired; NULL while live."
         prop__resource_type: "Whether this row is an aircraft or a duty_station."
         prop__tail_number: "Tail rows: the aircraft's registration; NULL on station rows."
-        prop__base: "Base the asset belongs to: east or west."
+        prop__base: "Base the asset belongs to: CVG or SLC."
         prop__seat: "Station rows: the seat the station serves (captain or fo); NULL on tail rows."
         prop__role: "Station rows: the member's roster role (lineholder or reserve); NULL on tail rows."
         prop__owner: "Station rows: the crew member the station represents; joins operating_unit.id. NULL on tail rows."
@@ -189,3 +210,24 @@ base:
         prop__allocated: "Slots currently held."
         prop__queue: "Identifier of the pool queue governing this asset's waiters; the pool records themselves are not part of this export."
         ref_index__queue: "Numeric key of the governing pool; its table is not part of this export."
+
+    - table: records__tick_decision
+      name: decision_log
+      description: "The engine's per-firing decision log: one row per recorded operational decision (a leg planned or cancelled, a duty day started, a payslip issued, a sickness episode, a fault hold, a reserve callout, a hire completed). The payslip_issued rows are the pay cadence's only surface — the instantaneous payday never lands in the lifecycle history."
+      columns:
+        record_index: decision_key
+        created_sim_time: decided_at
+        prop__journey_instance: lifecycle_id
+        ref_index__journey_instance: lifecycle_key
+        prop__decision_type: decision_type
+        prop__context: context
+      descriptions:
+        record_id: "Unique identifier for the decision."
+        record_index: "Unique numeric key for the decision, assigned in creation order."
+        created_sim_time: "When the decision fired."
+        active: "TRUE on every row — decisions are never retired."
+        deactivated_at: "Always NULL — decisions are never retired."
+        prop__journey_instance: "The process instance the decision belongs to; joins lifecycle.id."
+        ref_index__journey_instance: "Numeric key of the owning process instance; joins lifecycle.lifecycle_key."
+        prop__decision_type: "Which decision this is: flight_planned, flight_cancelled, duty_started, payslip_issued, sickness_episode, fault_hold, reserve_callout, or hire_completed."
+        prop__context: "Decision-specific payload recorded at fire time; the empty JSON object on every row this quarter."
