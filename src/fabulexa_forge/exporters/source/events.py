@@ -55,8 +55,10 @@ if TYPE_CHECKING:
     from fabulexa_forge.reader.sidecar import Sidecar
 
 from fabulexa_forge._sql import (
+    INSTANT_DENOTED_TYPE,
     _sql_literal,
     date_parse_denoted_type,
+    pinned_temporal_text_sql,
     render_date_parse_expr,
     render_decimal_expr,
     render_json_precision_expr,
@@ -103,15 +105,6 @@ the table-render source-type gates (`DecimalSourceIsDouble` /
 `DateParseSourceColumn`) already enforce it at plan time on every declared
 table carrying the election, so the log site derives the CAST-back type
 from the election's own class rather than re-reading the sidecar."""
-
-_INSTANT_DENOTED_TYPE: "dict[TemporalRender, str]" = {
-    "date": "DATE",
-    "time": "TIME",
-    "timestamp": "TIMESTAMP",
-    "timestamptz": "TIMESTAMPTZ",
-}
-"""An `instant` election's denoted DuckDB type per elected rendering — the
-same vocabulary `render_anchor_temporal_expr` dispatches on."""
 
 
 @dataclass(frozen=True)
@@ -511,129 +504,6 @@ def _strip_output_alias(aliased_sql: str) -> str:
     return aliased_sql[: -len(suffix)]
 
 
-def _pinned_date_text_sql(date_expr: str) -> str:
-    """The pinned CSV DATE text form, in SQL (writers.md § Temporal text
-    forms): `YYYY-MM-DD`.
-
-    Args:
-        date_expr: A DATE-typed SQL expression.
-
-    Returns:
-        A VARCHAR SQL expression.
-    """
-    return f"strftime({date_expr}, '%Y-%m-%d')"
-
-
-def _pinned_time_text_sql(time_expr: str) -> str:
-    """The pinned CSV TIME text form, in SQL: `HH:MM:SS.ffffff` — fixed
-    six-digit microsecond field.
-
-    DuckDB's `strftime` has no TIME overload (and casting TIME to VARCHAR
-    trims trailing zeros, matching no pinned form), so the value is added to
-    a fixed epoch DATE — a pure syntactic step, TIME carries no calendar
-    component — to reach a TIMESTAMP `strftime` does support.
-
-    Args:
-        time_expr: A TIME-typed SQL expression.
-
-    Returns:
-        A VARCHAR SQL expression.
-    """
-    return f"strftime(DATE '2000-01-01' + ({time_expr}), '%H:%M:%S.%f')"
-
-
-def _pinned_naive_timestamp_text_sql(ts_expr: str) -> str:
-    """The writer's default naive-TIMESTAMP serialization, pinned for the
-    in-JSON site (doc § Event-log and after-image reach): `YYYY-MM-DD
-    HH:MM:SS.ffffff`, the six-digit microsecond field omitted entirely when
-    the instant's microseconds are zero.
-
-    Args:
-        ts_expr: A naive TIMESTAMP-typed SQL expression.
-
-    Returns:
-        A parenthesized VARCHAR SQL expression.
-    """
-    with_us = f"strftime({ts_expr}, '%Y-%m-%d %H:%M:%S.%f')"
-    without_us = f"strftime({ts_expr}, '%Y-%m-%d %H:%M:%S')"
-    return (
-        f"(CASE WHEN date_part('microsecond', {ts_expr}) % 1000000 = 0"
-        f" THEN {without_us} ELSE {with_us} END)"
-    )
-
-
-def _pinned_timestamptz_offset_sql(instant_expr: str, zone: str) -> str:
-    """One absolute instant's UTC offset in `zone`, as `±HH:MM` SQL text —
-    computed session-TimeZone-independently via `date_diff` against the
-    instant's own UTC and `zone`-local naive projections (DuckDB's `%z`
-    strftime directive follows the *session* TimeZone and omits `:00`,
-    neither of which the pinned form allows).
-
-    Args:
-        instant_expr: A TIMESTAMPTZ-typed SQL expression.
-        zone: The anchor's IANA zone key.
-
-    Returns:
-        A parenthesized VARCHAR SQL expression.
-    """
-    zone_literal = _sql_literal(zone)
-    seconds_expr = (
-        f"date_diff('second', timezone('UTC', {instant_expr}),"
-        f" timezone({zone_literal}, {instant_expr}))"
-    )
-    sign_expr = f"CASE WHEN ({seconds_expr}) < 0 THEN '-' ELSE '+' END"
-    abs_expr = f"abs({seconds_expr})"
-    hours_expr = f"lpad(CAST(({abs_expr}) // 3600 AS VARCHAR), 2, '0')"
-    minutes_expr = f"lpad(CAST((({abs_expr}) % 3600) // 60 AS VARCHAR), 2, '0')"
-    return f"({sign_expr} || {hours_expr} || ':' || {minutes_expr})"
-
-
-def _pinned_timestamptz_text_sql(instant_expr: str, zone: str) -> str:
-    """The pinned CSV TIMESTAMPTZ text form, in SQL: `YYYY-MM-DD
-    HH:MM:SS.ffffff±HH:MM` — the local wall clock in `zone`, fixed
-    six-digit microsecond field, that instant's own UTC offset.
-
-    Args:
-        instant_expr: A TIMESTAMPTZ-typed SQL expression.
-        zone: The anchor's IANA zone key.
-
-    Returns:
-        A parenthesized VARCHAR SQL expression.
-    """
-    zone_literal = _sql_literal(zone)
-    wall_clock = (
-        f"strftime(timezone({zone_literal}, {instant_expr}), '%Y-%m-%d %H:%M:%S.%f')"
-    )
-    return f"({wall_clock} || {_pinned_timestamptz_offset_sql(instant_expr, zone)})"
-
-
-def _pinned_temporal_text_sql(
-    typed_expr: str, denoted_type: str, zone: "str | None"
-) -> str:
-    """Dispatch one already-typed temporal expression to its pinned text
-    form (doc § Event-log and after-image reach), by the type an `instant`
-    election or a `date_parse` format denotes.
-
-    Args:
-        typed_expr: A DATE / TIME / TIMESTAMP / TIMESTAMPTZ-typed SQL
-            expression.
-        denoted_type: Which of the four `typed_expr` carries.
-        zone: The anchor's IANA zone key — required (and used) only for
-            `'TIMESTAMPTZ'`; `date_parse` never denotes it.
-
-    Returns:
-        A VARCHAR SQL expression, the pinned text form.
-    """
-    if denoted_type == "DATE":
-        return _pinned_date_text_sql(typed_expr)
-    if denoted_type == "TIME":
-        return _pinned_time_text_sql(typed_expr)
-    if denoted_type == "TIMESTAMPTZ":
-        assert zone is not None, "a TIMESTAMPTZ pin requires the anchor zone"
-        return _pinned_timestamptz_text_sql(typed_expr, zone)
-    return _pinned_naive_timestamp_text_sql(typed_expr)
-
-
 def _render_elected_changes_value_sql(
     anchor: "EffectiveAnchor",
     election: "RenderElection",
@@ -680,8 +550,8 @@ def _render_elected_changes_value_sql(
             )
         )
         zone = str(anchor.timezone) if election.instant == "timestamptz" else None
-        return _pinned_temporal_text_sql(
-            native_expr, _INSTANT_DENOTED_TYPE[election.instant], zone
+        return pinned_temporal_text_sql(
+            native_expr, INSTANT_DENOTED_TYPE[election.instant], zone
         )
     assert isinstance(election, DateParseElection), (
         f"unrecognized RenderElection form for {column_label!r}: {election!r}"
@@ -691,7 +561,7 @@ def _render_elected_changes_value_sql(
             typed_expr, election.date_parse, _BARE_EXPR_ALIAS, table_label
         )
     )
-    return _pinned_temporal_text_sql(
+    return pinned_temporal_text_sql(
         parsed_expr, date_parse_denoted_type(election.date_parse), None
     )
 

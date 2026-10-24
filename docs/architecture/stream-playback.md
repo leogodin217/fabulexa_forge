@@ -246,7 +246,10 @@ Both formats render the snapshot-read op, and no whole-tape play emits one —
 ### Open-time behavior and errors
 
 Open runs streaming's existing eager pass — the per-stream resolvability,
-vocabulary, naming, selection, change-scope, and election gates — before any
+vocabulary, naming, selection, change-scope, and election gates, the
+open anchor threaded in for the payload-`instant` render gate
+(`TemporalRenderRequiresAnchor` on an anchorless `instant` entry, and the
+session-zone pin when one is declared) — before any
 event materializes, raising the pass's own error identities
 (`ExportError` and its election/streaming subclasses, plus the reader-domain
 `TemporalClassUnavailableError` the pass's `slice_only` check propagates).

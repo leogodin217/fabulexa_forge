@@ -121,7 +121,7 @@ class TestEvents:
         with open_emit(emit_dir) as emit:
             head = open_stream_playback(emit, config, None, discard_notice_sink)
             from_head = list(head.events(None, None))
-            resolution = resolve_streams(emit, config, discard_notice_sink)
+            resolution = resolve_streams(emit, config, None, discard_notice_sink)
             from_engine = list(
                 iter_resolved_stream_events(emit, config, None, resolution, None, None)
             )
@@ -134,7 +134,7 @@ class TestEvents:
         with open_emit(emit_dir) as emit:
             head = open_stream_playback(emit, config, None, discard_notice_sink)
             from_head = list(head.events(15, 30))
-            resolution = resolve_streams(emit, config, discard_notice_sink)
+            resolution = resolve_streams(emit, config, None, discard_notice_sink)
             from_engine = list(
                 iter_resolved_stream_events(emit, config, None, resolution, 15, 30)
             )

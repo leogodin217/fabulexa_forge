@@ -888,7 +888,7 @@ class TestDebeziumSchemaMatchesResolver:
         )
         source_identity = _source_identity()
         with open_emit(emit_dir) as emit:
-            resolution = resolve_streams(emit, config, discard_notice_sink)
+            resolution = resolve_streams(emit, config, None, discard_notice_sink)
             schemas = _build_schema_map(
                 emit, config, resolution, source_identity, "topic"
             )
@@ -943,7 +943,7 @@ class TestDebeziumSchemaMatchesResolver:
         )
         source_identity = _source_identity()
         with open_emit(emit_dir) as emit:
-            resolution = resolve_streams(emit, config, discard_notice_sink)
+            resolution = resolve_streams(emit, config, None, discard_notice_sink)
             schemas = _build_schema_map(
                 emit, config, resolution, source_identity, "topic"
             )
@@ -974,7 +974,7 @@ class TestDebeziumSchemaMatchesResolver:
         )
         source_identity = _source_identity()
         with open_emit(emit_dir) as emit:
-            resolution = resolve_streams(emit, config, discard_notice_sink)
+            resolution = resolve_streams(emit, config, None, discard_notice_sink)
             schemas = _build_schema_map(
                 emit, config, resolution, source_identity, "topic"
             )
@@ -1030,12 +1030,14 @@ class TestKindLabelsDoNotAffectRouting:
         )
         source_identity = _source_identity()
         with open_emit(emit_dir) as emit:
-            base_resolution = resolve_streams(emit, base_config, discard_notice_sink)
+            base_resolution = resolve_streams(
+                emit, base_config, None, discard_notice_sink
+            )
             base_schemas = _build_schema_map(
                 emit, base_config, base_resolution, source_identity, "source_table"
             )
             labeled_resolution = resolve_streams(
-                emit, labeled_config, discard_notice_sink
+                emit, labeled_config, None, discard_notice_sink
             )
             labeled_schemas = _build_schema_map(
                 emit,

@@ -263,10 +263,13 @@ RenderElection = (
 """A render-map value: a bare temporal-election literal (structural instant
 shorthand) or one typed election object. Source identity -> RenderElection."""
 
-StreamRenderElection = DecimalElection | JsonPrecisionElection
-"""A stream `render`-map value: the numeric elections only. Streaming's
-temporal exclusion admits no bare shorthand, `date_parse`, or `instant` form
-(design doc § Streaming attach)."""
+StreamRenderElection = DecimalElection | JsonPrecisionElection | InstantElection
+"""A stream `render`-map value: the typed elections that change value *text*
+only — `decimal`, `json_precision`, and the payload `instant` declaration
+(rendered to the pinned temporal text form at the codec seam). Streaming's
+temporal exclusion still admits no bare structural shorthand (structural
+instants are `ts`'s separate contract) and no `date_parse` (design doc
+§ Streaming attach)."""
 
 
 # ---------------------------------------------------------------------------
@@ -2407,9 +2410,10 @@ class KindStream(StrictBaseModel):
     payload; the event set is payload-independent). Never `prop__`-prefixed;
     duplicate-free."""
     render: "dict[str, StreamRenderElection] | None" = None
-    """Per-property numeric rendering election, keyed by bare property name
-    (a member of `properties`). `decimal` / `json_precision` only — no
-    temporal election attaches to streaming (design doc § Streaming attach).
+    """Per-property value rendering election, keyed by bare property name
+    (a member of `properties`). `decimal` / `json_precision` / `instant` —
+    the text-only typed elections; the bare structural shorthand and
+    `date_parse` do not attach to streaming (design doc § Streaming attach).
     Absent = default rendering."""
 
     where: dict[str, PredicateValue] | None = None
@@ -2495,10 +2499,11 @@ class MembershipStream(StrictBaseModel):
     written to declare an owner-identity-only feed. Never `elem__`/`member__`-
     prefixed; duplicate-free."""
     render: "dict[str, StreamRenderElection] | None" = None
-    """Per-field numeric rendering election, keyed by bare element-schema
-    field name (a member of `fields`). `decimal` / `json_precision` only; a
-    reference field is outside the domain (reference identity is key
-    election's surface). Absent = default rendering."""
+    """Per-field value rendering election, keyed by bare element-schema
+    field name (a member of `fields`). `decimal` / `json_precision` /
+    `instant` (the text-only typed elections); a reference field is outside
+    the domain (reference identity is key election's surface). Absent =
+    default rendering."""
 
     sub_types: list[str] | None = None
     """Owner sub-type subset — the stream's addressed owner population set,

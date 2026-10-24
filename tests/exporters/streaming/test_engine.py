@@ -2581,7 +2581,7 @@ class TestResolvedBoundedIteration:
             whole_tape = list(
                 iter_stream_events(emit, config, None, notice_sink=discard_notice_sink)
             )
-            resolution = resolve_streams(emit, config, discard_notice_sink)
+            resolution = resolve_streams(emit, config, None, discard_notice_sink)
             resolved = list(
                 iter_resolved_stream_events(emit, config, None, resolution, None, None)
             )
@@ -2601,7 +2601,7 @@ class TestResolvedBoundedIteration:
             whole_tape = list(
                 iter_stream_events(emit, config, None, notice_sink=discard_notice_sink)
             )
-            resolution = resolve_streams(emit, config, discard_notice_sink)
+            resolution = resolve_streams(emit, config, None, discard_notice_sink)
             bounded = list(
                 iter_resolved_stream_events(emit, config, None, resolution, 15, 35)
             )
@@ -2614,7 +2614,7 @@ class TestResolvedBoundedIteration:
         emit_dir = self._two_kind_emit_four_events(tmp_path)
         config = self._two_stream_config()
         with open_emit(emit_dir) as emit:
-            resolution = resolve_streams(emit, config, discard_notice_sink)
+            resolution = resolve_streams(emit, config, None, discard_notice_sink)
             events = list(
                 iter_resolved_stream_events(emit, config, None, resolution, 20, 20)
             )
@@ -2626,7 +2626,7 @@ class TestResolvedBoundedIteration:
         emit_dir = self._two_kind_emit_four_events(tmp_path)
         config = self._two_stream_config()
         with open_emit(emit_dir) as emit:
-            resolution = resolve_streams(emit, config, discard_notice_sink)
+            resolution = resolve_streams(emit, config, None, discard_notice_sink)
             events = list(
                 iter_resolved_stream_events(emit, config, None, resolution, 30, 10)
             )
@@ -2636,7 +2636,7 @@ class TestResolvedBoundedIteration:
         emit_dir = self._two_kind_emit_four_events(tmp_path)
         config = self._two_stream_config()
         with open_emit(emit_dir) as emit:
-            resolution = resolve_streams(emit, config, discard_notice_sink)
+            resolution = resolve_streams(emit, config, None, discard_notice_sink)
             events = list(
                 iter_resolved_stream_events(emit, config, None, resolution, 1_000, None)
             )
@@ -2648,7 +2648,7 @@ class TestResolvedBoundedIteration:
         emit_dir = self._two_kind_emit_four_events(tmp_path)
         config = self._two_stream_config()
         with open_emit(emit_dir) as emit:
-            resolution = resolve_streams(emit, config, discard_notice_sink)
+            resolution = resolve_streams(emit, config, None, discard_notice_sink)
             events = list(
                 iter_resolved_stream_events(emit, config, None, resolution, 0, 15)
             )
@@ -2671,7 +2671,7 @@ class TestResolvedBoundedIteration:
             whole_tape = list(
                 iter_stream_events(emit, config, None, notice_sink=discard_notice_sink)
             )
-            resolution = resolve_streams(emit, config, discard_notice_sink)
+            resolution = resolve_streams(emit, config, None, discard_notice_sink)
             bounded = list(
                 iter_resolved_stream_events(emit, config, None, resolution, 20, None)
             )
@@ -2699,7 +2699,7 @@ class TestResolvedBoundedIteration:
             whole_tape = list(
                 iter_stream_events(emit, config, None, notice_sink=discard_notice_sink)
             )
-            resolution = resolve_streams(emit, config, discard_notice_sink)
+            resolution = resolve_streams(emit, config, None, discard_notice_sink)
             bounded = list(
                 iter_resolved_stream_events(emit, config, None, resolution, 0, None)
             )
@@ -2719,7 +2719,7 @@ class TestResolvedBoundedIteration:
         config = _state_changes_config([_kind_stream("items", "missing_kind", [])])
         with open_emit(emit_dir) as emit:
             with pytest.raises(ExportError, match="stream 'items'"):
-                resolve_streams(emit, config, discard_notice_sink)
+                resolve_streams(emit, config, None, discard_notice_sink)
 
     def test_resolve_streams_drives_resolved_iterator_same_as_entry_point(
         self, tmp_path: Path
@@ -2730,7 +2730,7 @@ class TestResolvedBoundedIteration:
         emit_dir = self._two_kind_emit_four_events(tmp_path)
         config = self._two_stream_config()
         with open_emit(emit_dir) as emit:
-            resolution = resolve_streams(emit, config, discard_notice_sink)
+            resolution = resolve_streams(emit, config, None, discard_notice_sink)
             via_resolution = list(
                 iter_resolved_stream_events(emit, config, None, resolution, None, None)
             )

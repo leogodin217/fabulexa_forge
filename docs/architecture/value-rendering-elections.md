@@ -9,7 +9,8 @@ leaves of a JSON payload, rounded byte-preservingly). Together with the
 temporal family's structural shorthand and declared parse, the elections
 are declared in one property-first `render:` map on the source and base
 declaration grammars; dimensional declares the numeric pair through its
-derived one-of, and streaming per declared stream (numeric family only).
+derived one-of, and streaming per declared stream (`decimal` /
+`json_precision` / payload `instant` — the text-only forms).
 Elections are renderings composed **above** the faithful read: the reader
 and the derivations layer serve unrendered values, conformance and the
 corrupters read unrendered values, and one rendering authority per
@@ -190,28 +191,38 @@ routing through it changes nothing in the determinism statement;
 
 ### Streaming attach
 
-A declared stream's `render:` map accepts `decimal` and `json_precision`
-entries keyed by the stream's bare property (or membership field) names.
+A declared stream's `render:` map accepts `decimal`, `json_precision`,
+and payload `instant` entries keyed by the stream's bare property (or
+membership field) names.
 
 | Site | Rendering |
 |---|---|
-| After-image entry of an elected property (`c` / `u`) | The elected text form — the decimal string with `s` fraction digits, or the leaf-rounded payload — in place of the raw codec string |
+| After-image entry of an elected property (`c` / `u`, `join` / `leave`) | The elected text form — the decimal string with `s` fraction digits, the leaf-rounded payload, or the pinned temporal text of the anchor-rendered instant — in place of the raw codec string |
 | `d` tombstone | Unaffected — carries no after-image |
 | Debezium value schema | Unaffected — elected entries remain string-typed by codec; the election changes value text only |
-| Message key, merge order, `seq`, `ts` | Unaffected — identity is key election's, ordering is raw sim-time's |
+| Message key, merge order, `seq`, `ts` | Unaffected — identity is key election's, ordering is raw sim-time's, and `ts` remains the event's own separate rendering contract |
 
 The authorities apply at the codec seam — the fold itself is untouched:
 `decimal` applies to the after-image entry's codec string cast back to
 its declared `DOUBLE` type (exact — the codec round-trips float64
 values), `json_precision` to the payload string directly (it is already
-the payload's own text). Both compile through the shared authorities in
+the payload's own text), and `instant` to the codec string cast back to
+its declared `BIGINT` type, rendered through the shared wallclock
+renderer and pinned to the writers' temporal text form — the same pinned
+text the event log's `changes` entries carry (§ Event-log and
+after-image reach). All compile through the shared authorities in
 the stream's SQL pipeline — the post-fold SELECT that assembles
 after-images — so payload assembly receives already-elected text and no
-mode carries a second rounding implementation. The elected text is
-therefore identical to the table modes' render of the same value.
+mode carries a second rounding or temporal-text implementation. The
+elected text is therefore identical to the table modes' render of the
+same value.
 
-The temporal elections (`instant`, `date_parse`, structural shorthand) do
-not attach to streaming (§ Boundaries).
+An `instant` entry requires a resolved anchor — the eager pass refuses an
+anchorless invocation (`TemporalRenderRequiresAnchor`), never falls back
+to raw integers — and pins the session zone at resolve, the same
+connection-scoped setup every table-mode invocation performs. The
+remaining temporal spellings (`date_parse`, the bare structural
+shorthand) do not attach to streaming (§ Boundaries).
 
 ### Event-log and after-image reach (source mode)
 
@@ -435,12 +446,17 @@ authority a single cast-shaped expression instead of a hand-rolled
 rounding pipeline, and float64 sources make the tie case vanishingly
 rare (only exact binary halves tie).
 
-**Streaming gets the numeric family only.** Numeric elections change
-value *text*, which is exactly what a codec surface can carry; the
-temporal family's streaming exclusion (payloads are string-typed by
-codec, `ts` is a separate contract) is the temporal family's own
-boundary ([`temporal-elections.md`](temporal-elections.md)
-§ Boundaries).
+**Streaming gets the text-only elections.** A stream render entry can
+change value *text*, which is exactly what a codec surface can carry —
+`decimal`, `json_precision`, and the payload `instant` all qualify,
+because the `changes` entries already pin an elected instant to a text
+form and the streaming after-image carries that same pinned text. What
+stays excluded is what the codec cannot carry or already owns: a
+structural instant's rendering is `ts`'s separate contract (the bare
+shorthand has no payload column to address), and `date_parse` re-reads a
+producer string convention the wire has no reason to re-interpret — the
+temporal family's own boundary
+([`temporal-elections.md`](temporal-elections.md) § Boundaries).
 
 **Not the reader.** Placing elections at the read surface would redefine
 "faithful" for every consumer at once — conformance and the corrupters
@@ -469,7 +485,9 @@ contract is external and vendored, and this surface reads it as-is.
   `changes` text. Elections ride table declarations (§ Rationale); the
   agreement gate states what a log-side declaration surface would have
   to satisfy.
-- **No streaming temporal elections** — the temporal family's exclusion
+- **No streaming `date_parse` or structural shorthand** — the payload
+  `instant` election attaches per stream (§ Streaming attach); the other
+  temporal spellings remain the temporal family's exclusion
   ([`temporal-elections.md`](temporal-elections.md) § Boundaries).
 - **No corrupter change** — `schema_drift.retype_to` remains the only
   type-breaking surface; a corrupted payload that breaks a declared leaf

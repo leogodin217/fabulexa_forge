@@ -15,6 +15,7 @@ from fabulexa_forge.config.models import (
     DebeziumConfig,
     DebeziumSourceIdentity,
     DecimalElection,
+    InstantElection,
     JsonPrecisionElection,
     KafkaConfig,
     KindStream,
@@ -24,14 +25,13 @@ from fabulexa_forge.config.models import (
 )
 from fabulexa_forge.errors import ConfigError
 
-#: The three unified-map temporal forms — the bare structural-instant
-#: shorthand, `date_parse`, and `instant` — every one unrepresentable on a
-#: stream's `render` map (`StreamRenderElection` excludes them; design doc §
-#: Streaming attach).
+#: The two unified-map temporal forms still unrepresentable on a stream's
+#: `render` map — the bare structural-instant shorthand and `date_parse`
+#: (`StreamRenderElection` excludes them; design doc § Streaming attach).
+#: The payload `instant` form attaches: it changes value text only.
 _TEMPORAL_RENDER_FORMS: list[object] = [
     "date",
     {"date_parse": "%Y-%m-%d"},
-    {"instant": "date"},
 ]
 
 # ---------------------------------------------------------------------------
@@ -298,6 +298,15 @@ def test_kind_stream_render_json_precision_parses() -> None:
     assert ks.render == {"status": JsonPrecisionElection(json_precision={"x": 2})}
 
 
+def test_kind_stream_render_instant_parses() -> None:
+    """A payload `instant` election, keyed by a bare property name, parses —
+    the one temporal form that attaches to streaming (text-only)."""
+    ks = KindStream.model_validate(
+        _make_kind_stream(render={"status": {"instant": "timestamp"}})
+    )
+    assert ks.render == {"status": InstantElection(instant="timestamp")}
+
+
 def test_kind_stream_render_empty_map_rejected() -> None:
     """`render: {}` (present but empty) is rejected."""
     with pytest.raises(ValidationError, match="non-empty"):
@@ -306,9 +315,8 @@ def test_kind_stream_render_empty_map_rejected() -> None:
 
 @pytest.mark.parametrize("temporal_form", _TEMPORAL_RENDER_FORMS)
 def test_kind_stream_render_temporal_form_rejected(temporal_form: object) -> None:
-    """No temporal form (bare literal shorthand, date_parse, instant) is
-    representable on a stream's render map — streaming's temporal
-    exclusion."""
+    """The bare literal shorthand and date_parse stay unrepresentable on a
+    stream's render map — streaming's remaining temporal exclusion."""
     with pytest.raises(ValidationError):
         KindStream.model_validate(_make_kind_stream(render={"status": temporal_form}))
 
@@ -404,6 +412,14 @@ def test_membership_stream_render_json_precision_parses() -> None:
     assert ms.render == {"priority": JsonPrecisionElection(json_precision={"x": 2})}
 
 
+def test_membership_stream_render_instant_parses() -> None:
+    """A payload `instant` election, keyed by a bare field name, parses."""
+    ms = MembershipStream.model_validate(
+        _make_membership_stream(render={"priority": {"instant": "timestamp"}})
+    )
+    assert ms.render == {"priority": InstantElection(instant="timestamp")}
+
+
 def test_membership_stream_render_empty_map_rejected() -> None:
     """`render: {}` (present but empty) is rejected."""
     with pytest.raises(ValidationError, match="non-empty"):
@@ -412,8 +428,8 @@ def test_membership_stream_render_empty_map_rejected() -> None:
 
 @pytest.mark.parametrize("temporal_form", _TEMPORAL_RENDER_FORMS)
 def test_membership_stream_render_temporal_form_rejected(temporal_form: object) -> None:
-    """No temporal form is representable on a stream's render map, either
-    (same union exclusion as KindStream)."""
+    """The bare shorthand and date_parse stay unrepresentable on a stream's
+    render map, either shape (same union exclusion as KindStream)."""
     with pytest.raises(ValidationError):
         MembershipStream.model_validate(
             _make_membership_stream(render={"priority": temporal_form})

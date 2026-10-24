@@ -238,17 +238,21 @@ inapplicability (the sidecar's `sub_type_columns` partition states which value c
 each sub-type owns). `init` never proposes a combined stream.
 
 **Value elections on after-images.** A declared stream's optional `render:` map
-carries `decimal` and `json_precision` entries keyed by the stream's bare
-property (or membership field) names; an elected property's after-image entry
-(`c` / `u`) carries the elected text form — the decimal string with `s`
-fraction digits, or the leaf-rounded payload — in place of the raw codec
-string. The `d` tombstone, the Debezium value schema (elected entries remain
-string-typed by codec), the message key, merge order, `seq`, and `ts` are all
-unaffected. The authorities apply at the codec seam in the post-fold SELECT
-that assembles after-images — the fold itself is untouched, and the elected
-text is identical to the table modes' render of the same value
+carries `decimal`, `json_precision`, and payload `instant` entries keyed by
+the stream's bare property (or membership field) names; an elected property's
+after-image entry (`c` / `u`, `join` / `leave`) carries the elected text form
+— the decimal string with `s` fraction digits, the leaf-rounded payload, or
+the pinned temporal text of the anchor-rendered instant — in place of the raw
+codec string. The `d` tombstone, the Debezium value schema (elected entries
+remain string-typed by codec), the message key, merge order, `seq`, and `ts`
+are all unaffected. The authorities apply at the codec seam in the post-fold
+SELECT that assembles after-images — the fold itself is untouched, and the
+elected text is identical to the table modes' render of the same value
 ([`value-rendering-elections.md`](value-rendering-elections.md) § Streaming
-attach). The temporal elections do not attach (§ Boundaries).
+attach). An `instant` entry requires a resolved anchor
+(`TemporalRenderRequiresAnchor` at the eager pass) and pins the session zone
+at resolve; `date_parse` and the bare structural shorthand do not attach
+(§ Boundaries).
 
 ### Identity projection
 
@@ -726,8 +730,10 @@ offset is always the true offset for that instant: a fall-back-fold event render
 is a pure function of `event_sim_time` and the resolved anchor. Anchored `ts` is
 microsecond resolution (Python `datetime`), or whole seconds / minutes under the
 anchor's grain election ([`temporal-elections.md`](temporal-elections.md) § The
-grain election) — the one temporal election that reaches streaming, because the
-rendering clock carries it rather than any column. Merge order and `seq` never
+grain election) — the temporal election that reaches `ts`, because the
+rendering clock carries it rather than any column (a *payload* sim-instant
+renders through its own per-stream `instant` election — § Value elections on
+after-images). Merge order and `seq` never
 read `ts`, so coarsening manufactures display ties only; the full-ns event-time
 key always remains on `event_sim_time` for any consumer needing nanosecond
 precision.
@@ -1326,7 +1332,7 @@ required parameter and passes it through.
 | Out-of-domain `where` value | element outside its column's declared `enum_domains` entry | A per-element `discriminator-value-unobserved` **notice**, never an error; leads with `stream '{name}'`, carries the shared two-case wording (topic-will-be-empty when no element of the entry was observed; element-contributes-no-events otherwise), emitted in eager-pass iteration order (streams → `where` keys → elements) |
 | `StreamChangeScopeUnresolvable` | every `only` / `ignore` entry resolves to a `prop__` column of the stream's kind | `"stream '{name}': {field} entry '{property}' has no prop__{property} column on kind '{kind}'"` |
 | Election resolution gates | `ElectionKindUnknown` / `ElectionSubTypeUnknown` / `ElectionPresentationUndeclared` — the election surface's gates, reused verbatim ([`key-election.md`](key-election.md) § Static gates) | Those messages |
-| Stream render elections | each `render:` key names a declared property (or membership field) of the stream's projection, and its source column carries the election's admitted sidecar type — `DecimalSourceIsDouble` / `JsonPrecisionSourceIsVarchar`, run per declared stream ([`value-rendering-elections.md`](value-rendering-elections.md) § Validation Rules) | Leads with `stream '{name}'`; names the property and the type |
+| Stream render elections | each `render:` key names a declared property (or membership field) of the stream's projection, and its source column carries the election's admitted sidecar type — `DecimalSourceIsDouble` / `InstantSourceIsBigint` / `JsonPrecisionSourceIsVarchar`, run per declared stream; an `instant` entry additionally requires a resolved anchor (`TemporalRenderRequiresAnchor`) ([`value-rendering-elections.md`](value-rendering-elections.md) § Validation Rules) | Leads with `stream '{name}'`; names the property and the type |
 | Stream key uniformity | one stream, one key surface: every population the stream's keys draw from elects the same surface (kind-shaped: the spanned populations; membership-shaped: the addressed owner population set — the declared owner `sub_types`, else the owner kind's full domain); uniform `presentation_id` additionally pairwise union-safe | `ElectionMixedIdentity` / `ElectionUnionUnsafe`, naming the stream and the differing (population, surface) pairs |
 | Identity projection gates | every **published** surface (§ Identity projection) runs the election's own gates over the stream's spanned/addressed populations: `presentation_id` published only where the registry declares each population; each published surface's key spaces pairwise union-safe | `ElectionPresentationUndeclared` / `ElectionUnionUnsafe`, naming the stream, the surface, and the population or pair |
 | Edge union safety | per after-image reference column and per membership member field, admitted target populations' resolved surfaces pairwise union-safe; the admitted set is the kind-targeted posture — the target kind's full declared domain (per member kind for a member field) | `ElectionUnionUnsafe`, naming the stream, the column, and the unsafe pair |
@@ -1597,10 +1603,13 @@ What the streaming exporter deliberately does not own:
   properties only. Selecting on a value that changes over the tape would make the event
   set horizon-dependent, and there is no as-of qualifier to disambiguate it — the gate
   refuses rather than picking an instant.
-- **Temporal elections.** A stream `render:` map carries the numeric value
-  elections only ([`value-rendering-elections.md`](value-rendering-elections.md));
-  the temporal family does not attach — payloads are string-typed by codec and
-  `ts` is a separate contract ([`temporal-elections.md`](temporal-elections.md)
+- **Structural temporal elections and `date_parse`.** A stream `render:` map
+  carries the text-only value elections — `decimal`, `json_precision`, and the
+  payload `instant`
+  ([`value-rendering-elections.md`](value-rendering-elections.md) § Streaming
+  attach). The bare structural shorthand and `date_parse` do not attach —
+  structural instants are `ts`'s separate contract, and a producer string
+  rides the wire as-is ([`temporal-elections.md`](temporal-elections.md)
   § Boundaries).
 - **Member-kind / per-field partitioning of memberships.** A membership stream feeds
   from one `(owner_kind, property)` table; the per-row member kind is a payload column
@@ -1652,7 +1661,7 @@ What the streaming exporter deliberately does not own:
 | [`row-predicates.md`](row-predicates.md) | The scalar-or-list `where` grammar, its literal typing, and the one rendering authority streaming compiles through |
 | [`notices.md`](notices.md) | The channel the per-element `discriminator-value-unobserved` notice flows through, and the required-sink posture `iter_stream_events` follows |
 | [`slice-only.md`](slice-only.md) | The export-wide `slice_only` policy — streaming's refuse-only posture over every author-named surface, and the class-level event-set vacuity |
-| [`value-rendering-elections.md`](value-rendering-elections.md) | The per-stream `render:` map's numeric value elections and their codec-seam application to after-images |
+| [`value-rendering-elections.md`](value-rendering-elections.md) | The per-stream `render:` map's value elections (`decimal` / `json_precision` / payload `instant`) and their codec-seam application to after-images |
 | [`anchor.md`](anchor.md) | The `EffectiveAnchor` resolution surface — origin/zone precedence, `rebase` + CLI flags; the absolute instant `ts` renders from |
 | [`reader.md`](reader.md) | The `Emit` / `Sidecar` surface this reads through — the records spine, current values, `subtype_values`, `sub_type_columns`, and the `history_tracked` flag |
 | [`config-docstrings.md`](config-docstrings.md) | The three-channel docstring convention the `StreamConfig` models follow |

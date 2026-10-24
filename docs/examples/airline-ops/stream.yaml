@@ -33,11 +33,11 @@
 #                  sub-type's one tracked mutation), and the close-out
 #                  deletes. The leg's airline surface (flight number, route,
 #                  planned destination, base, departure bank) rides every
-#                  event. KNOWN LIMIT: streaming admits no temporal render
-#                  election on payload values, so `scheduled_departure`
-#                  rides the wire as the producer's raw sim-instant (BIGINT
-#                  ns on the tape's clock) rather than a wallclock string —
-#                  the table exports render it; the wire cannot yet.
+#                  event. `scheduled_departure` is the producer's raw
+#                  sim-instant stamp (BIGINT ns on the tape's clock); the
+#                  `render:` election ({instant: timestamp}) puts it on the
+#                  same ops clock as the table exports, so the wire carries
+#                  the app database's wallclock text, not a raw ns offset.
 #   lifecycle    — journey_instance is not sub-typed (journey_type is not a
 #                  `<kind>_type` discriminator domain), so one stream carries
 #                  all four processes (50,262 events); `process` on every
@@ -99,6 +99,8 @@ streams:
       presentation_id: id
       destination: destination_id
       bank: departure_bank
+    render:
+      scheduled_departure: {instant: timestamp}
     kind_label: flight_leg
   - name: lifecycle
     kind: journey_instance
