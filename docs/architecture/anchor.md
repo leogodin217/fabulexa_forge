@@ -72,6 +72,15 @@ Two author-controlled knobs are resolved against the sidecar:
 | set | set | **Both** — origin at midnight / the given civil time *in* the given zone. |
 | absent | absent | Identity — sidecar anchor verbatim, or raw integers if the sidecar has none. |
 
+The `rebase:` block carries one further field outside this table:
+`grain`, the temporal grain election. It moves no part of origin or zone
+resolution — it rides the resolved `EffectiveAnchor` into the renderers,
+which truncate every rendered wall clock to it. Its vocabulary, reach, and
+anchor-required rule are the temporal elections'
+([`temporal-elections.md`](temporal-elections.md) § The grain election); a
+grain-only block with no resolvable origin is `RebaseOriginUnresolvable`,
+so the matrix above never gains a silent fifth row.
+
 ### Precedence (two independent chains)
 
 | Quantity | Resolution order |

@@ -1,0 +1,48 @@
+# Recipe: streaming / temporal-grain
+# ============================================================
+# The GRAIN election on the rendering clock: `rebase.grain` truncates every
+# rendered temporal value — here each event's `ts` — to whole seconds or
+# minutes.
+#
+# Real operational systems rarely log below the second, and schedule-driven
+# systems live at the minute, so microsecond-everywhere timestamps are a fast
+# synthetic tell. The grain coarsens the *rendering* only: the event set,
+# merge order, `seq`, and the full-ns `event_sim_time` key are untouched —
+# coarsening manufactures display ties, never reordering.
+#
+# The grain is declared beside the origin and zone because it is a property
+# of the one rendering clock, not of any column — the same election reaches
+# every mode's rendered instants (dimensional / source / base render through
+# the same anchor) and streaming's `ts`:
+#   grain: second → whole seconds
+#   grain: minute → whole minutes
+# Absent: the default microsecond rendering, byte-identical output. A grain
+# needs a resolved anchor (an origin + zone, here or in the sidecar
+# runtime); with neither, the run refuses rather than silently ignoring the
+# election.
+#
+#   origin  = 2030-06-01T08:30:45 UTC (the :45 makes truncation visible)
+#   event @ +1 day (p001 create) -> 08:30:45, truncated -> 08:30:00
+#
+# Fixture world (recipe emit):
+#   records__patient — p001 status pending@1d -> active@2d -> discharged@3d
+#                      p002 status pending@2d
+#
+# Output (patient.jsonl) — same 4 events as state-changes, minute-grained ts:
+#   seq 1  c p001  ts 2030-06-02T08:30:00+00:00
+#   seq 2  c p002  ts 2030-06-03T08:30:00+00:00
+#   seq 3  u p001  ts 2030-06-03T08:30:00+00:00
+#   seq 4  u p001  ts 2030-06-04T08:30:00+00:00
+
+content: state-changes
+
+streams:
+  - name: patient
+    kind: patient
+    properties: [status]
+
+# The rendering clock: origin, zone, and the elected minute grain.
+rebase:
+  base_date: 2030-06-01T08:30:45
+  timezone: UTC
+  grain: minute

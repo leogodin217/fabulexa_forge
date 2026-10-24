@@ -352,7 +352,7 @@ a check, no operation whose defect the reader's skip-guards silently swallow).
 
 | Recipe | What it teaches |
 |---|---|
-| [`rebase-timestamp`](../../examples/recipes/rebase-timestamp/config.yaml) | top-level `rebase` block: repin the wallclock origin/zone (`base_date` / `timezone`) that all timestamp columns render through |
+| [`rebase-timestamp`](../../examples/recipes/rebase-timestamp/config.yaml) | top-level `rebase` block: repin the wallclock origin/zone (`base_date` / `timezone`) that all timestamp columns render through — and the home of the `grain` election ([`streaming/temporal-grain`](../../examples/recipes/streaming/temporal-grain/config.yaml)) |
 | [`table-column-rename`](../../examples/recipes/table-column-rename/config.yaml) | Author-verbatim output naming: rename the table and each column; `from` decouples output names from base-layer columns |
 | [`exclude-kinds-tables`](../../examples/recipes/exclude-kinds-tables/config.yaml) | `exclude` guard: declare kinds/tables no output may source; fails loudly on accidental inclusion (it is a guard, not a filter) |
 | [`table-descriptions`](../../examples/recipes/table-descriptions/config.yaml) | Author description overrides, both granularities: a table entry's `description` and a column entry's `description` replace the forwarded/inherited prose in the companion README and manifest — documentation-inert (the dataset is byte-identical), prose only |
@@ -407,6 +407,7 @@ flat table by default. These recipes exercise `base:`'s escape hatches
 | [`streaming/identity-tombstone`](../../examples/recipes/streaming/identity-tombstone/config.yaml) | `properties: []` declares an identity-only notification feed — the event set is unchanged (payload-independent); a deactivated record emits a `d` with a null after-image (the log-compaction tombstone) |
 | [`streaming/multi-kind-routing`](../../examples/recipes/streaming/multi-kind-routing/config.yaml) | Stream several kinds in one run — one declared stream (and one `<name>.jsonl`) per kind; `seq` is a single global sequence across all streams, so merging the files by `seq` recovers the one true order |
 | [`streaming/rebase-ts`](../../examples/recipes/streaming/rebase-ts/config.yaml) | top-level `rebase` block on a stream: choose the wallclock origin/zone each event's `ts` renders through; events and `seq` are unchanged, only `ts` moves |
+| [`streaming/temporal-grain`](../../examples/recipes/streaming/temporal-grain/config.yaml) | `rebase.grain` election: truncate every rendered temporal value to whole seconds or minutes — realistic operational clock resolution. Shown here on `ts`; the same anchor-borne election coarsens every table mode's rendered instants, while the event set, `seq`, and the full-ns `event_sim_time` key are untouched |
 | [`streaming/clock-realtime`](../../examples/recipes/streaming/clock-realtime/config.yaml) | `clock.mode: realtime` paces delivery to a controlled real-time rate (`speed` = sim-to-real multiplier; `idle_cap_seconds` collapses long quiet gaps); pacing governs only wall-clock timing — bytes, topics, and counts are byte-identical to an unpaced run |
 
 **Declared streams (naming, combining, sub-type scoping)**

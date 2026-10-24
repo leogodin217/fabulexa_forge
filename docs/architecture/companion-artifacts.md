@@ -159,7 +159,8 @@ present — author override, forge-pinned event-log prose, or the forwarded
 per-column description and unit where the documentation channel's inheritance
 rule yields them), then declared-value gloss lists for closed-domain and
 kind-name-as-value columns, then row count (full exports only); then the
-resolved anchor facts (start instant and IANA zone, or their absence); then
+resolved anchor facts (start instant and IANA zone — plus the elected grain
+when one is declared — or their absence); then
 emit identity. Per-column documentation resolves through the reader's
 documentation view via the provenance maps on the report
 ([`documentation-channel.md`](documentation-channel.md) § The

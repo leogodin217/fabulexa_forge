@@ -12,7 +12,9 @@ from fabulexa_forge.anchor import (
     EffectiveAnchor,
     TemporalRender,
     anchor_temporal_expr,
+    anchor_to_json,
     render_anchor_temporal_expr,
+    render_ts,
     resolve_effective_anchor,
 )
 from fabulexa_forge.config.models import RebaseConfig
@@ -440,3 +442,129 @@ def test_ns_truncates_to_microseconds_identically_across_all_elections() -> None
             f"SELECT ({one_and_a_half_us}) = ({exactly_one_us}) AS eq"
         ).fetchone()
         assert row == (True,)
+
+
+# ---------------------------------------------------------------------------
+# The grain election
+# ---------------------------------------------------------------------------
+
+
+def test_resolution_carries_the_elected_grain() -> None:
+    """A grain-bearing rebase block rides the resolved anchor."""
+    rebase = RebaseConfig.model_validate({"grain": "minute"})
+    anchor = resolve_effective_anchor(UTC_RUNTIME, rebase, None, None)
+    assert anchor is not None
+    assert anchor.grain == "minute"
+    # Origin and zone still come from the sidecar untouched.
+    assert anchor.timezone == ZoneInfo("UTC")
+
+
+def test_no_election_resolves_grain_none() -> None:
+    """No grain in the rebase block → anchor.grain is None (default µs)."""
+    anchor = resolve_effective_anchor(UTC_RUNTIME, None, None, None)
+    assert anchor is not None
+    assert anchor.grain is None
+
+
+def test_grain_only_rebase_without_origin_refuses() -> None:
+    """grain elected, no sidecar runtime, no origin → never a silent no-op."""
+    rebase = RebaseConfig.model_validate({"grain": "second"})
+    with pytest.raises(RebaseOriginUnresolvable):
+        resolve_effective_anchor(None, rebase, None, None)
+
+
+def test_no_grain_compiles_byte_identical_sql() -> None:
+    """A grain-free anchor renders exactly the pre-election expression."""
+    base = EffectiveAnchor(
+        start_instant=datetime.fromisoformat("2020-03-01T00:00:00+00:00"),
+        timezone=ZoneInfo("UTC"),
+    )
+    explicit_none = EffectiveAnchor(
+        start_instant=base.start_instant, timezone=base.timezone, grain=None
+    )
+    for render in ("timestamp", "date", "time", "timestamptz"):
+        assert anchor_temporal_expr(base, "0", render) == anchor_temporal_expr(
+            explicit_none, "0", render
+        )
+        assert "date_trunc" not in anchor_temporal_expr(base, "0", render)
+
+
+@pytest.mark.parametrize("grain,keep_seconds", [("second", True), ("minute", False)])
+def test_grain_truncates_every_instant_rendering(
+    grain: str, keep_seconds: bool
+) -> None:
+    """Each instant election truncates its local wall clock to the grain."""
+    anchor = EffectiveAnchor(
+        start_instant=datetime.fromisoformat("2026-03-02T00:00:00-07:00"),
+        timezone=ZoneInfo("America/Phoenix"),
+        grain=grain,  # type: ignore[arg-type]
+    )
+    con = duckdb.connect()
+    # Mirror the reader's session-zone pin (reader.md § The session-zone pin).
+    con.sql("SET TimeZone='America/Phoenix'")
+    ns = (5 * 3_600 + 7 * 60 + 33) * 1_000_000_000 + 123_456_789  # 05:07:33.123456789
+    ts = _rendered(anchor, ns, "timestamp")
+    time_ = _rendered(anchor, ns, "time")
+    tz = _rendered(anchor, ns, "timestamptz")
+    expected_local = "05:07:33" if keep_seconds else "05:07:00"
+    row = con.sql(
+        f"SELECT CAST(({ts}) AS VARCHAR), CAST(({time_}) AS VARCHAR),"
+        f" ({tz}) = TIMESTAMPTZ '2026-03-02 {expected_local}-07:00'"
+    ).fetchone()
+    assert row == (f"2026-03-02 {expected_local}", expected_local, True)
+
+
+def test_family_identity_holds_under_a_grain() -> None:
+    """date / time stay pure projections of the minute-grained timestamp."""
+    anchor = EffectiveAnchor(
+        start_instant=datetime.fromisoformat("2024-06-01T12:00:00-04:00"),
+        timezone=ZoneInfo("America/New_York"),
+        grain="minute",
+    )
+    con = duckdb.connect()
+    con.sql("SET TimeZone='America/New_York'")
+    ns = (3 * 3_600 + 42 * 60 + 59) * 1_000_000_000 + 999_000  # +03:42:59.000999
+    ts = _rendered(anchor, ns, "timestamp")
+    date_ = _rendered(anchor, ns, "date")
+    time_ = _rendered(anchor, ns, "time")
+    row = con.sql(
+        f"SELECT ({date_}) = CAST(({ts}) AS DATE) AS date_eq,"
+        f" ({time_}) = CAST(({ts}) AS TIME) AS time_eq"
+    ).fetchone()
+    assert row == (True, True)
+
+
+def test_render_ts_truncates_to_the_elected_grain() -> None:
+    """render_ts coarsens the offset-bearing ISO string to the grain."""
+    origin = datetime.fromisoformat("2026-03-02T00:00:00-07:00")
+    ns = (5 * 3_600 + 7 * 60 + 33) * 1_000_000_000 + 123_456_789
+    cases = {
+        None: "2026-03-02T05:07:33.123456-07:00",
+        "second": "2026-03-02T05:07:33-07:00",
+        "minute": "2026-03-02T05:07:00-07:00",
+    }
+    for grain, expected in cases.items():
+        anchor = EffectiveAnchor(
+            start_instant=origin,
+            timezone=ZoneInfo("America/Phoenix"),
+            grain=grain,  # type: ignore[arg-type]
+        )
+        assert render_ts(ns, anchor) == expected
+
+
+def test_anchor_to_json_carries_grain_only_when_elected() -> None:
+    """The serialized anchor gains a grain key only under an election."""
+    origin = datetime.fromisoformat("2020-03-01T00:00:00+00:00")
+    bare = EffectiveAnchor(start_instant=origin, timezone=ZoneInfo("UTC"))
+    elected = EffectiveAnchor(
+        start_instant=origin, timezone=ZoneInfo("UTC"), grain="minute"
+    )
+    assert anchor_to_json(bare) == {
+        "start_instant": "2020-03-01T00:00:00+00:00",
+        "timezone": "UTC",
+    }
+    assert anchor_to_json(elected) == {
+        "start_instant": "2020-03-01T00:00:00+00:00",
+        "timezone": "UTC",
+        "grain": "minute",
+    }

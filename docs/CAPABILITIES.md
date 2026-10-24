@@ -373,6 +373,15 @@ Each mode reads the same emit and writes a different target shape.
   election requires a resolved anchor, while a parse never reads one. The reader's session-zone pin and pinned
   CSV text forms make zone-bearing output machine-independent. See
   [`architecture/temporal-elections.md`](architecture/temporal-elections.md).
+- ✓ **Temporal grain election** — `rebase.grain` (`second` / `minute`) truncates
+  every rendered temporal value to a realistic operational clock resolution;
+  absent, the default µs rendering is byte-identical. Config-wide by design (a
+  source system stamps at its clock's grain, uniformly) and carried on the
+  resolved anchor, so every renderer coarsens together — the instant elections,
+  SCD-2 window bounds, and streaming/playback `ts` alike; durations, declared
+  parses, supplement cells, ordering, and window math are untouched. See
+  [`architecture/temporal-elections.md`](architecture/temporal-elections.md)
+  § The grain election.
   *Teaches: realistic warehouse/app-database column typing (admission dates,
   wait-time intervals, zone-aware timestamps) instead of one universal
   `TIMESTAMP`.*
