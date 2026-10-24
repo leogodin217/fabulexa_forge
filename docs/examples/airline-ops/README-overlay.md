@@ -16,10 +16,10 @@ The headline derivations:
   two seats:
 
   ```sql
-  select flight_number, sum(epoch(granted_at - queued_from)) / 60.0 as delay_min
+  select leg_code, sum(epoch(granted_at - queued_from)) / 60.0 as delay_min
   from fact_leg_assembly_wait
   where granted_at is not null
-  group by flight_number
+  group by leg_code
   ```
 
   or, equivalently, the leg's `dispatching` + `crewing_captain` +
@@ -40,22 +40,30 @@ The headline derivations:
 
 Things to know before you query:
 
+- **Leg code vs. flight number.** `leg_code` (LEG-nnnnn) identifies ONE flown
+  leg and is the key every fact joins `dim_scheduled_leg` on. `flight_number`
+  (FXnnn) is the published service — one number per (departure bank,
+  destination) pair, reused day after day — so grouping a quarter by
+  `flight_number` aggregates a service, not a leg.
 - **One timeline table, four processes.** `fact_lifecycle_state` carries the
   flight, roster, sickness and employment timelines in one table; always
-  filter on `process` first. `flight_number` is set on flight rows,
-  `crew_code` on the other three — exactly one of the two per row.
-- **Crew are individuals, rated for one seat.** Each crew member (CRW staff
-  code) is a captain or a first officer (`seat`), and a leg fills both seats.
-  The base layer mints no display names — the staff code is the identity
-  surface.
+  filter on `process` first. `leg_code` is set on flight rows, `crew_code` on
+  the other three — exactly one of the two per row, and
+  (`leg_code`/`crew_code`, `process`, `entered_at`) identifies a row.
+- **Crew are named individuals, rated for one seat.** Each crew member
+  (CRW staff code, with `first_name` / `last_name` / `full_name` on the dim)
+  is a captain or a first officer (`seat`), and a leg fills both seats.
 - **The crew fact is per seat.** `fact_leg_crew` has one row per seat hold,
   so a fully crewed leg has two rows (plus an extra row for a seat lost
-  mid-block and recovered by reserve callout). Group on `flight_number` for
+  mid-block and recovered by reserve callout). Group on `leg_code` for
   leg-level questions, filter on `seat` for seat-level ones.
 - **The SCD-2 dim is small but real.** `dim_crew_member` versions on
   employment status *and* the episode counter, so joining a leg's crew at
   block time takes the usual `[valid_from, valid_to)` as-of join, not the
   current version.
+- **Haul class lives on the airport.** The destination is drawn when the leg
+  enters the schedule and never changes; `dim_scheduled_leg.airport_code`
+  joins `dim_airport`, and a leg's `route_class` is its destination's.
 - **Cancellations release their holds.** A cancelled leg may still appear in
   `fact_tail_assignment` / `fact_leg_crew` (holds it acquired before
   scrubbing) and in the wait facts (queue positions it abandoned). Join to
@@ -67,7 +75,7 @@ State occupancies, not events: each row is an interval `[entered_at,
 exited_at)`, and `exited_at` is NULL only on a subject's last observed state.
 A state entered and exited within one engine instant is coalesced away, so
 the flight timeline shows `dispatching` only for legs that actually waited at
-the gate (2,279 of 5,759) — an instantly-granted tail leaves no dispatching
+the gate (2,261 of 5,759) — an instantly-granted tail leaves no dispatching
 interval. The same goes for the two crewing states: an instantly-seated
 captain or first officer leaves no `crewing_captain` / `crewing_fo` interval.
 
@@ -83,9 +91,9 @@ aboard when the tape stopped.
 
 The pushback-delay fact. One leg can wait more than once (a tail wait, then a
 captain wait, then a first-officer wait, then — if a seat was lost mid-block —
-a reserve-callout wait), so sum per `flight_number`. A wait row whose
-`granted_at` is NULL at quarter end was still queued when the tape stopped; a
-cancelled leg's wait ends when the leg scrubs, not with a grant.
+a reserve-callout wait), so sum per `leg_code`. A wait row whose `granted_at`
+is NULL at quarter end was still queued when the tape stopped; a cancelled
+leg's wait ends when the leg scrubs, not with a grant.
 
 ## table: dim_crew_member
 
