@@ -14,8 +14,11 @@ from zoneinfo import ZoneInfo
 
 import pytest
 from _support.notices import discard_notice_sink
+from _support.sidecar_builder import identity_column, prop_column
 from recipes._recipe_fixture import DAY, build_recipe_emit
 
+from exporters._emit_fixtures import _table_spec
+from fabulexa_forge import SUPPORTED_BASE_FORMAT_VERSION
 from fabulexa_forge.anchor import EffectiveAnchor
 from fabulexa_forge.config.models import (
     ColumnDecl,
@@ -508,6 +511,181 @@ def test_snapshot_table_unstable_key_refused(sidecar: Sidecar) -> None:
         ExportError, match=r"key column 'status'.*tracked property 'status'"
     ):
         check_key_columns_stable(table, _config(table), sidecar)
+
+
+# ---------------------------------------------------------------------------
+# temporal_class: constant — the constancy admission (key, channel, fk hop)
+#
+# A projection-minted presentation column is temporal_class: constant WITH
+# history_tracked: true (its history holds only its genesis row); the gates
+# key constancy on temporal_class, not the SCD class. Bespoke sidecars — the
+# recipe emit carries no constant+tracked column.
+# ---------------------------------------------------------------------------
+
+
+def _structural_records_columns() -> list[dict[str, object]]:
+    return [
+        identity_column("fork_path", "VARCHAR"),
+        identity_column("record_id", "VARCHAR"),
+        {"name": "created_sim_time", "type": "BIGINT"},
+        {"name": "active", "type": "BOOLEAN"},
+        {"name": "deactivated_at", "type": "BIGINT"},
+        {"name": "last_mutation_sim_time", "type": "BIGINT"},
+        identity_column("record_index", "BIGINT"),
+    ]
+
+
+def _aircraft_sidecar(*, hop_class: str = "constant") -> Sidecar:
+    """aircraft (constant+tracked tail_number, tracked status) <- flight
+    (reference hop prop__aircraft_id, constant+tracked or plain tracked)."""
+    aircraft_cols = [
+        *_structural_records_columns(),
+        prop_column(
+            "prop__tail_number",
+            "VARCHAR",
+            history_tracked=True,
+            temporal_class="constant",
+        ),
+        prop_column(
+            "prop__status", "VARCHAR", history_tracked=True, temporal_class="tracked"
+        ),
+    ]
+    flight_cols = [
+        *_structural_records_columns(),
+        prop_column(
+            "prop__aircraft_id",
+            "VARCHAR",
+            history_tracked=True,
+            temporal_class=hop_class,  # type: ignore[arg-type]
+            references="aircraft",
+        ),
+        identity_column("ref_index__aircraft_id", "BIGINT"),
+    ]
+    return Sidecar.from_raw(
+        {
+            "base_format_version": SUPPORTED_BASE_FORMAT_VERSION,
+            "branches": [{"fork_path": "trunk", "parent": None, "slice_at": 1000}],
+            "tables": [
+                _table_spec(
+                    "records__aircraft", "records", aircraft_cols, 2, "aircraft"
+                ),
+                _table_spec("records__flight", "records", flight_cols, 3, "flight"),
+            ],
+        }
+    )
+
+
+_DIM_AIRCRAFT = TableDecl(
+    name="dim_aircraft",
+    role="dim",
+    scd="type1",
+    source=SourceDecl(grain="records", kind="aircraft"),
+    key=["tail_number"],
+    columns=[
+        _from("tail_number", "prop__tail_number"),
+        _from("status", "prop__status"),
+    ],
+)
+
+
+def _flight_fact() -> TableDecl:
+    return TableDecl(
+        name="fact_flight",
+        role="fact",
+        source=SourceDecl(grain="records", kind="flight"),
+        key=["flight_id", "aircraft_key"],
+        columns=[
+            _from("flight_id", "record_id"),
+            ColumnDecl(
+                name="aircraft_key", fk=FkClause(to="dim_aircraft", via="reference")
+            ),
+        ],
+    )
+
+
+def test_key_on_constant_tracked_property_accepted() -> None:
+    """A temporal_class: constant key passes whatever its history_tracked flag."""
+    sidecar = _aircraft_sidecar()
+    check_key_columns_stable(
+        _DIM_AIRCRAFT, DimensionalConfig(tables=[_DIM_AIRCRAFT]), sidecar
+    )  # must not raise
+
+
+def test_constant_tracked_property_channel_is_invariant() -> None:
+    """The delivery classifier shares the reading: a constant+tracked carry
+    never demotes a table from 'append'."""
+    sidecar = _aircraft_sidecar()
+    table = TableDecl(
+        name="fact_aircraft",
+        role="fact",
+        source=SourceDecl(grain="records", kind="aircraft"),
+        key=["aircraft_id"],
+        columns=[
+            _from("aircraft_id", "record_id"),
+            _from("tail_number", "prop__tail_number"),
+        ],
+    )
+    assert (
+        window_delivery_class(table, DimensionalConfig(tables=[table]), sidecar)
+        == "append"
+    )
+
+
+def test_constant_tracked_fk_hop_is_invariant() -> None:
+    """A reference fk over a constant+tracked hop is horizon-invariant, as a
+    key and for the classifier."""
+    sidecar = _aircraft_sidecar()
+    fact = _flight_fact()
+    config = DimensionalConfig(tables=[_DIM_AIRCRAFT, fact])
+    check_key_columns_stable(fact, config, sidecar)  # must not raise
+    assert window_delivery_class(fact, config, sidecar) == "append"
+
+
+def test_tracked_non_constant_fk_hop_still_refused() -> None:
+    """A tracked, non-constant hop still varies — refused as key, 'upsert'."""
+    sidecar = _aircraft_sidecar(hop_class="tracked")
+    fact = _flight_fact()
+    config = DimensionalConfig(tables=[_DIM_AIRCRAFT, fact])
+    with pytest.raises(
+        ExportError, match=r"fk hop 'prop__aircraft_id' is a tracked reference"
+    ):
+        check_key_columns_stable(fact, config, sidecar)
+    assert window_delivery_class(fact, config, sidecar) == "upsert"
+
+
+def test_key_on_tracked_non_constant_property_still_refused() -> None:
+    """A tracked, non-constant property stays refused as a key."""
+    sidecar = _aircraft_sidecar()
+    table = _DIM_AIRCRAFT.model_copy(update={"key": ["status"]})
+    with pytest.raises(
+        ExportError, match=r"key column 'status'.*tracked property 'status'"
+    ):
+        check_key_columns_stable(table, DimensionalConfig(tables=[table]), sidecar)
+
+
+def test_key_on_property_without_temporal_attributes_refused() -> None:
+    """A property declaring neither temporal attribute is of unknown
+    constancy — refused, never admitted."""
+    bare_cols = [
+        *_structural_records_columns(),
+        {"name": "prop__tail_number", "type": "VARCHAR"},
+    ]
+    sidecar = Sidecar.from_raw(
+        {
+            "base_format_version": SUPPORTED_BASE_FORMAT_VERSION,
+            "branches": [{"fork_path": "trunk", "parent": None, "slice_at": 1000}],
+            "tables": [
+                _table_spec("records__aircraft", "records", bare_cols, 2, "aircraft")
+            ],
+        }
+    )
+    table = _DIM_AIRCRAFT.model_copy(
+        update={"columns": [_from("tail_number", "prop__tail_number")]}
+    )
+    with pytest.raises(
+        ExportError, match=r"property 'tail_number' of unknown constancy"
+    ):
+        check_key_columns_stable(table, DimensionalConfig(tables=[table]), sidecar)
 
 
 # ---------------------------------------------------------------------------

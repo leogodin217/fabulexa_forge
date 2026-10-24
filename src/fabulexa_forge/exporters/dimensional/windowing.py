@@ -81,9 +81,15 @@ def _source_variance(
     """Why a grain-surface column may vary between horizons, or None if invariant.
 
     Structural records columns answer through the reader's structural-temporal
-    surface; `prop__` columns through the sidecar's `history_tracked` flag —
-    except on a versioned (SCD-2) table, where a version row carries its
-    version's value and a tracked read is invariant; a `ref_index__` sibling
+    surface; `prop__` columns through the sidecar's temporal pair:
+    `temporal_class: constant` is invariant whatever its SCD class — the
+    contract's guarantee that the value never changes after creation; a
+    genesis-tracked constant's history holds only its mint row (contract
+    § Column temporal semantics) — as is a `history_tracked: false` property
+    (no trail to replay; the slice value is carried verbatim under
+    truncation), and a tracked read on a versioned (SCD-2) table, where a
+    version row carries its version's value. A property declaring neither
+    answer is of unknown constancy and refused. A `ref_index__` sibling
     follows its `prop__`; interval ends vary; everything else on a history or
     membership surface is verbatim under truncation.
     """
@@ -97,9 +103,13 @@ def _source_variance(
             try:
                 for col in sidecar.columns(source_table_name):
                     if col.name == prop_name:
+                        if col.temporal_class == "constant":
+                            return None
                         if col.history_tracked is False or versioned:
                             return None
-                        return f"reads tracked property '{prop_name[6:]}'"
+                        if col.history_tracked is True:
+                            return f"reads tracked property '{prop_name[6:]}'"
+                        break
             except TableNotFoundError:
                 pass
             return f"reads property '{prop_name[6:]}' of unknown constancy"
@@ -222,7 +232,14 @@ def _reference_fk_variance(
     config: "DimensionalConfig",
     sidecar: "Sidecar",
 ) -> str | None:
-    """A reference fk is invariant iff every hop column is history_tracked: false."""
+    """A reference fk is invariant iff every hop column is temporal_class:
+    constant or history_tracked: false.
+
+    `constant` is the contract's constancy guarantee and admits a
+    genesis-tracked hop whatever its SCD class; `history_tracked: false`
+    (a hop with no trail to replay) is carried verbatim under truncation.
+    A tracked, non-constant hop varies.
+    """
     assert col_decl.fk is not None
     if not sidecar.history_tracked_available():
         return "fk via: reference over an emit that does not declare history_tracked"
@@ -238,6 +255,8 @@ def _reference_fk_variance(
         )
         hops = paths[0] if paths else []
     for hop in hops:
+        if hop.temporal_class == "constant":
+            continue
         if hop.history_tracked is not False:
             return f"fk hop '{hop.name}' is a tracked reference"
     return None
@@ -305,8 +324,14 @@ def check_key_columns_stable(
     declaration and sidecar; never reads data. Each key column's value
     channel is classified by `_channel_variance` — conservative: a channel
     of unknown constancy (a producer column outside the structural set, a
-    reference fk on an emit without `history_tracked` flags) is refused,
-    not admitted. The first varying channel in `key` order refuses.
+    reference fk on an emit without `history_tracked` flags, a property
+    declaring neither temporal attribute) is refused, not admitted.
+    Constancy keys on `temporal_class`, aligned with `LookupColumnSafety`:
+    a `temporal_class: constant` property is admitted whatever its
+    `history_tracked` flag — `history_tracked` answers the SCD-class
+    question, not "does this value change" (contract § Column temporal
+    semantics) — and the sidecar `immutable` flag is never consulted. The
+    first varying channel in `key` order refuses.
 
     Args:
         table_decl: The output table declaration (its key and columns).
