@@ -11,32 +11,39 @@
 # from the engine's ontology — read from the atlas and `sub_type_columns`,
 # measured against THIS emit:
 #
-#   actor/crew          -> crew_member      (93 — named individual crew on
-#                                            payroll, each rated captain/fo)
-#   actor/flight        -> flight_leg       (2,601 scheduled legs, each
-#                                            stamping its scheduled departure
-#                                            when its bank fires)
-#   entity/destination  -> destination      (12 airports; haul class and
-#                                            demand weight are per origin
-#                                            base since realism v2)
-#   resource/aircraft   -> aircraft         (20 tails)
-#   resource/duty_station -> duty_station   (93 — one per crew member; its
+#   actor/crew          -> crew_member      (102 — named individual crew on
+#                                            payroll, each rated captain/fo;
+#                                            since v3 carrying duty_days, the
+#                                            1-rest-day-in-7 legality counter)
+#   actor/flight        -> flight_leg       (2,737 scheduled legs, each
+#                                            stamping its published departure
+#                                            at slotting; since v3 also the
+#                                            typed cancel_reason)
+#   entity/destination  -> destination      (12 airports; haul class, demand
+#                                            weight, and — since v3 — the four
+#                                            published block-minute columns,
+#                                            all per origin base)
+#   entity/base         -> operating_base   (2 — new in v3: the bases with
+#                                            their IANA timezones, the
+#                                            station-local-time join handle)
+#   resource/aircraft   -> aircraft         (12 tails)
+#   resource/duty_station -> duty_station   (102 — one per crew member; its
 #                                            owner reference is the HR<->ops
 #                                            bridge, its seat the member's)
 #   queue               -> dispatch_pool    (4 per-base pools: config rows a
 #                                            real dispatch system would have)
-#   journey_instance    -> lifecycle        (2,876 process instances)
+#   journey_instance    -> lifecycle        (3,039 process instances)
 #   tick_decision (payslip_issued)
-#                       -> payroll_event    (408 payslips — see PAYDAY)
-#   holders  (aircraft) -> tail_hold        (2,597 tail assignments)
-#   holders  (stations) -> station_hold     (12,522 station holds: legs
+#                       -> payroll_event    (859 payslips — see PAYDAY)
+#   holders  (aircraft) -> tail_hold        (2,077 tail assignments)
+#   holders  (stations) -> station_hold     (11,835 station holds: legs
 #                                            seating a captain or first
 #                                            officer, and the member's own
 #                                            off-duty/stand-down holds)
-#   waiters             -> pool_wait        (1,505 queue positions — the
+#   waiters             -> pool_wait        (1,887 queue positions — the
 #                                            scarce-resource delay record)
-#   presence            -> crew_presence    (15,409 duty / sick / muster claims)
-#   bound_roles         -> role_binding     (17,824 role bindings per
+#   presence            -> crew_presence    (15,814 duty / sick / muster claims)
+#   bound_roles         -> role_binding     (16,767 role bindings per
 #                                            lifecycle: dest, tail,
 #                                            captain_seat, fo_seat, and the
 #                                            roster-mechanism roles)
@@ -45,30 +52,44 @@
 #   SPLIT   holders -> tail_hold + station_hold via the junction's owner
 #           `sub_types` — the two pools are different business facts (fleet
 #           rotation vs crew availability) and splitting keeps each table's
-#           owner id one population.
+#           owner id one population. entity splits the same way since v3
+#           (destination + operating_base): the sub-types share only `code`,
+#           and one conformed table would glue a 2-row config catalogue onto
+#           the 12-row destination catalogue with NULLs both ways.
 #   KEPT    dispatch_pool: dimensional drops the queue kind as mechanism, but
 #           an app database HAS the pool-config table (discipline, full-pool
 #           policy, base) and pool_wait.pool_id needs a join target.
 #   SCHED   flight_leg.scheduled_departure is the producer's sim-instant
-#           stamp (BIGINT ns; value == the depart firing's clock.now,
-#           verified on all 2,597 stamps). The `render:` election
-#           ({instant: timestamptz}) puts it on the same ops clock as the
-#           structural columns, so delay vs plan is computable in the DB;
-#           NULL on the 4 legs still awaiting their bank at tape's end.
-#   PAYDAY  v2's instantaneous payday never lands in the lifecycle history
+#           stamp (BIGINT ns). Since v3 it is the PUBLISHED departure — the
+#           leg's drawn 5-minute-grid slot plus the fixed 45-minute ops
+#           allowance, stamped at slotting. Ops release starts at the SLOT,
+#           so most flown legs push ahead of the published time (61.7%
+#           measured): negative delay vs plan is correct data. The `render:`
+#           election ({instant: timestamptz}) puts it on the same ops clock
+#           as the structural columns, so delay vs plan is computable in the
+#           DB; NULL on the 622 legs that had not drawn their slot by tape's
+#           end. Scheduled ARRIVAL is this column plus the destination's
+#           matching sched_block_* minutes — a join by design, not a
+#           pre-materialized sum.
+#   PAYDAY  the instantaneous payday never lands in the lifecycle history
 #           (active -> payday -> active at one instant collapses to no
 #           change), so neither the lifecycle table nor audit_log carries
 #           the pay cadence. The engine's payslip decision record is its
 #           only surface: payroll_event is tick_decision narrowed to
-#           decision_type=payslip_issued (408 rows — when, and whose
-#           employment lifecycle). The rest of tick_decision stays dropped
-#           (below).
-#   DROPPED tick_decision's other seven decision types and its bindings
-#           table: `prop__context` is the empty JSON object on all 10,952
-#           rows (measured), every other decision_type mirrors a lifecycle
-#           state entry the audit_log already carries (duty_started 7,477 =
-#           on_duty entries, flight_planned 2,601 = scheduled, and so on),
-#           and its bindings carry only the `dest` role, which role_binding
+#           decision_type=payslip_issued (859 rows, semi-monthly — when,
+#           and whose employment lifecycle). The rest of tick_decision
+#           stays dropped (below).
+#   DROPPED tick_decision's other nine decision types and its bindings
+#           table. Since v3 every decision carries a JSON `context`
+#           payload, but each one MIRRORS a typed surface these tables
+#           already carry — verified: the cancel decisions' context.reason
+#           equals flight_leg.cancel_reason on all 119 rows, and every
+#           other decision_type mirrors a lifecycle state entry the
+#           audit_log already carries (duty_started 7,709 = on_duty
+#           entries, flight_planned 2,737 = the schedule entries,
+#           cancelled_crew 81 + cancelled_weather 38 = the cancelled
+#           close-outs, and so on). Key on typed columns, never the JSON.
+#           The bindings carry only the `dest` role, which role_binding
 #           also carries. Omission is source's exclusion mechanism.
 #   DROPPED crew `constitution` (robust/typical/fragile): the generator's
 #           sickness-propensity input, not an HR attribute any airline
@@ -77,29 +98,36 @@
 #   KEYS    every population that mints a code elects `presentation_id`
 #           (the `keys:` block): crew_member.id is the staff code
 #           (CRW-nnnn), flight_leg.id the leg code (LEG-nnnnn),
-#           duty_station.id the station code (DS-nnnn) — offset, gapped,
-#           emit-unique counters, the airline's own identifiers — and every
-#           referencing surface (lifecycle.subject_id, the junctions' owner
-#           and member columns, duty_station.crew_member_id, the audit
-#           log's item_id) renders the same election, so no exported id
-#           sits at a constant offset from anything. The populations that
-#           mint no code — destination, aircraft, dispatch_pool, lifecycle,
-#           payroll_event — elect `record_index` (a compact BIGINT serial):
-#           this emit's record_id is the same creation-order counter as
-#           VARCHAR, so there is no less-synthetic surface to elect; flagged
-#           upstream for v3 (presentation keys for journeys especially). The
-#           reused flight number (FXnnn, one per (bank, destination) pair)
-#           is an attribute of the leg, not its key.
+#           duty_station.id the station code (DS-nnnn) — and since v3 the
+#           lifecycle and decision records mint codes too, so
+#           lifecycle.id is the journey code (JRN-nnnnn) and
+#           payroll_event.id the decision code (DEC-nnnnnn): the round-2
+#           record_index fallback for those two populations (flagged
+#           upstream after round 2) is resolved. Every referencing surface
+#           (lifecycle.subject_id, payroll_event.lifecycle_id, the
+#           junctions' owner and member columns, duty_station.
+#           crew_member_id, the audit log's item_id) renders the same
+#           election, so no exported id sits at a constant offset from
+#           anything. The populations that still mint no code —
+#           destination, operating_base, aircraft, dispatch_pool — elect
+#           `record_index` (a compact BIGINT serial): this emit's record_id
+#           is the same creation-order counter as VARCHAR, so there is no
+#           less-synthetic surface to elect. The reused flight number
+#           (FXnnn, one per (bank, destination) pair) is an attribute of
+#           the leg, not its key; the aircraft's registration keys the
+#           DIMENSIONAL dim, but source state tables present the
+#           election-governed identity as `id`, and tail_number sits
+#           beside it.
 #   PKs     declare_keys: the DuckDB dump carries PK/UNIQUE constraints
 #           resolved from the sidecar's presentation_keys registry — round-1
 #           QA read a keyless dump.
 #   AUDITED actor/flight joins the audit sources: round-1 shipped the core
 #           flight_leg table unaudited, which made the README's log-replay
-#           claim false in the data. Its 2,601 creates (schedule entries,
-#           with the leg's constant attributes in the changeset), its 2,597
-#           scheduled-departure stamps (property updates — the changeset
-#           carries the raw ns value, as an audit payload would), and its
-#           close-out destroys all land in audit_log as item_type
+#           claim false in the data. Its 2,737 creates (schedule entries,
+#           with the leg's constant attributes in the changeset), its
+#           slot-stamp updates (the changeset carries the raw ns value, as
+#           an audit payload would), its v3 cancel_reason stamps on the 119
+#           scrubs, and its close-outs all land in audit_log as item_type
 #           flight_leg.
 #   HYGIENE mechanism internals stay out: the engine's scheduling-queue
 #           reference on aircraft / duty_station (`queue`), the holds' and
@@ -125,12 +153,13 @@
 # authoritative list.
 #
 # History is opt-in and tracked-ness decides who is audited: actor/crew
-# (status, sickness_episodes — plus the constant name stamps at create),
-# actor/flight (creates, the scheduled-departure stamps, and close-outs —
-# see AUDITED), journey_instance (current_state — the operational
-# changelog), resource (capacity, allocated — the two pools' live
-# occupancy). entity.city is tracked but never changes in this emit; it is
-# audited with the rest of nothing (left out via `only`).
+# (status, sickness_episodes, and since v3 the daily duty_days counter
+# writes — plus the constant name stamps at create), actor/flight (creates,
+# the slot stamps, the v3 cancel_reason stamps, and close-outs — see
+# AUDITED), journey_instance (current_state — the operational changelog),
+# resource (capacity, allocated — the two pools' live occupancy).
+# entity.city is tracked but never changes in this emit; it is audited with
+# the rest of nothing (left out via `only`).
 #
 # CLOCK: the `rebase:` block declares the carrier's operations clock. The
 # emit's own anchor is 2026-01-05T00:00:00 UTC and the tape is 146 days: an
@@ -160,9 +189,9 @@ keys:
   resource:
     aircraft: record_index
     duty_station: presentation_id
-  journey_instance: record_index
+  journey_instance: presentation_id
   queue: record_index
-  tick_decision: record_index
+  tick_decision: presentation_id
 
 source:
   declare_keys: true
@@ -180,7 +209,7 @@ source:
       columns: [created_sim_time, active, deactivated_at, last_mutation_sim_time,
                 prop__first_name, prop__last_name, prop__full_name,
                 prop__base, prop__seat, prop__role, prop__shift,
-                prop__status, prop__sickness_episodes]
+                prop__status, prop__sickness_episodes, prop__duty_days]
       rename:
         created_sim_time: created_at
         last_mutation_sim_time: updated_at
@@ -193,6 +222,7 @@ source:
         prop__shift: shift
         prop__status: status
         prop__sickness_episodes: sickness_episodes
+        prop__duty_days: duty_days
       render:
         created_sim_time: timestamptz
         deactivated_at: timestamptz
@@ -212,14 +242,16 @@ source:
         prop__shift: "The report window the member musters in: early or late."
         prop__status: "HR lifecycle status: onboarding, active, notice, or resigned."
         prop__sickness_episodes: "Sickness episodes recorded against the member to date."
+        prop__duty_days: "Consecutive duty days since the member's last rostered day off — the 1-rest-day-in-7 legality counter: mustering requires five or fewer and increments it; a day off resets it to zero."
 
     - name: flight_leg
       kind: actor
       sub_types: [flight]
-      description: "A scheduled leg: an out-and-back rotation from its base to its planned destination, entered on the published schedule; its scheduled departure instant is stamped when its departure bank fires."
+      description: "A scheduled leg: an out-and-back rotation from its base to its planned destination, entered on the published schedule; its published departure instant (slot plus the 45-minute ops allowance) is stamped at slotting, and a scrubbed leg carries its typed cancellation reason."
       columns: [created_sim_time, active, deactivated_at, last_mutation_sim_time,
                 prop__flight_number, prop__route_number, prop__destination,
-                prop__base, prop__bank, prop__scheduled_departure]
+                prop__base, prop__bank, prop__scheduled_departure,
+                prop__cancel_reason]
       rename:
         created_sim_time: created_at
         last_mutation_sim_time: updated_at
@@ -229,6 +261,7 @@ source:
         prop__base: base
         prop__bank: departure_bank
         prop__scheduled_departure: scheduled_departure
+        prop__cancel_reason: cancel_reason
       render:
         created_sim_time: timestamptz
         deactivated_at: timestamptz
@@ -245,15 +278,19 @@ source:
         prop__destination: "The leg's planned destination, drawn when the leg entered the schedule; joins destination.id."
         prop__base: "Station the rotation departs from and returns to: CVG or SLC."
         prop__bank: "Which departure bank the leg is scheduled in: am or pm."
-        prop__scheduled_departure: "The leg's scheduled departure instant — the published bank opening plus the leg's drawn offset, stamped when the bank fires. Pushback delay is anything after it. NULL on a leg still awaiting its bank."
+        prop__scheduled_departure: "The leg's PUBLISHED departure instant: its drawn 5-minute-grid slot plus the fixed 45-minute ops allowance, stamped at slotting. Ops release starts at the slot, so most flown legs push ahead of this time — negative delay vs plan is normal. Scheduled arrival derives by joining the destination's matching sched_block_* minutes. NULL on a leg that has not drawn its slot."
+        prop__cancel_reason: "Why the leg was scrubbed: weather, no_captain, no_fo, captain_sick, fo_sick, no_reserve_captain, or no_reserve_fo. NULL on every leg that was not cancelled. The typed column consumers key on — the decision log's JSON context only mirrors it."
 
     - name: destination
       kind: entity
-      description: "An airport the carrier serves — the catalogue legs plan destinations from. Haul class and demand weighting are facts of the city pair, one column per origin base: a leg's class is its destination's class from the leg's own base."
+      sub_types: [destination]
+      description: "An airport the carrier serves — the catalogue legs plan destinations from. Haul class, demand weighting, and published block minutes are facts of the city pair, one column per origin base: a leg's class is its destination's class from the leg's own base."
       columns: [created_sim_time, active, deactivated_at, last_mutation_sim_time,
                 prop__code, prop__city,
                 prop__class_from_cvg, prop__class_from_slc,
-                prop__popularity_cvg, prop__popularity_slc]
+                prop__popularity_cvg, prop__popularity_slc,
+                prop__sched_block_cvg_out, prop__sched_block_cvg_in,
+                prop__sched_block_slc_out, prop__sched_block_slc_in]
       rename:
         created_sim_time: created_at
         last_mutation_sim_time: updated_at
@@ -263,6 +300,10 @@ source:
         prop__class_from_slc: route_class_from_slc
         prop__popularity_cvg: popularity_cvg
         prop__popularity_slc: popularity_slc
+        prop__sched_block_cvg_out: sched_block_cvg_out
+        prop__sched_block_cvg_in: sched_block_cvg_in
+        prop__sched_block_slc_out: sched_block_slc_out
+        prop__sched_block_slc_in: sched_block_slc_in
       render:
         created_sim_time: timestamptz
         deactivated_at: timestamptz
@@ -279,6 +320,34 @@ source:
         prop__class_from_slc: "Haul class of the SLC service to this airport: short, medium, or long."
         prop__popularity_cvg: "Relative demand weighting used when CVG legs plan a destination."
         prop__popularity_slc: "Relative demand weighting used when SLC legs plan a destination."
+        prop__sched_block_cvg_out: "Published block minutes CVG -> this airport, 5-minute grid. A CVG leg's scheduled arrival = its scheduled_departure plus this column."
+        prop__sched_block_cvg_in: "Published block minutes this airport -> CVG, 5-minute grid."
+        prop__sched_block_slc_out: "Published block minutes SLC -> this airport, 5-minute grid. An SLC leg's scheduled arrival = its scheduled_departure plus this column."
+        prop__sched_block_slc_in: "Published block minutes this airport -> SLC, 5-minute grid."
+
+    - name: operating_base
+      kind: entity
+      sub_types: [base]
+      description: "An operating base (crew domicile + hub station): CVG and SLC, each with its IANA timezone. Its code matches the base string crew, legs, assets and pools carry; the timezone is the handle for deriving station-local time from the ops-clock instants."
+      columns: [created_sim_time, active, deactivated_at, last_mutation_sim_time,
+                prop__code, prop__timezone]
+      rename:
+        created_sim_time: created_at
+        last_mutation_sim_time: updated_at
+        prop__code: base_code
+        prop__timezone: timezone
+      render:
+        created_sim_time: timestamptz
+        deactivated_at: timestamptz
+        last_mutation_sim_time: timestamptz
+      descriptions:
+        record_index: "Unique numeric identifier for the base, assigned in creation order."
+        created_sim_time: "When the base was configured (at genesis)."
+        active: "TRUE while the base operates."
+        deactivated_at: "When the base closed; NULL while operating."
+        last_mutation_sim_time: "When the base row was last updated."
+        prop__code: "IATA code of the base (CVG or SLC) — the string every base/home-base column carries."
+        prop__timezone: "The base's IANA timezone (America/New_York for CVG, America/Denver for SLC). Every exported instant is on the carrier's single ops clock; convert with this zone for station-local time."
 
     - name: aircraft
       kind: resource
@@ -385,7 +454,7 @@ source:
         deactivated_at: timestamptz
         last_mutation_sim_time: timestamptz
       descriptions:
-        record_index: "Unique numeric identifier for the lifecycle record, assigned in creation order."
+        presentation_id: "The lifecycle's journey code (JRN-nnnnn); the table's key."
         created_sim_time: "When the lifecycle began."
         active: "TRUE while the process is still running; FALSE once it reached a terminal state."
         deactivated_at: "When the process finished; NULL while running."
@@ -397,7 +466,7 @@ source:
     - name: payroll_event
       kind: tick_decision
       where: {prop__decision_type: payslip_issued}
-      description: "One payslip issued to a crew member: the pay packet landing on the monthly payday, each member's at its own minute through the morning. The payday is instantaneous, so it is an event row, not a state — the lifecycle table never shows a payday in flight."
+      description: "One payslip issued to a crew member: the pay packet landing on the semi-monthly payday, each member's at its own minute through the morning. The payday is instantaneous, so it is an event row, not a state — the lifecycle table never shows a payday in flight."
       columns: [created_sim_time, prop__journey_instance]
       rename:
         created_sim_time: paid_at
@@ -405,9 +474,9 @@ source:
       render:
         created_sim_time: timestamptz
       descriptions:
-        record_index: "Unique numeric identifier for the payslip, assigned in creation order."
+        presentation_id: "The payslip's decision code (DEC-nnnnnn); the table's key."
         created_sim_time: "When the pay packet landed."
-        prop__journey_instance: "The employment lifecycle the payslip belongs to; joins lifecycle.id (its subject_id is the member's staff code)."
+        prop__journey_instance: "The employment lifecycle the payslip belongs to; joins lifecycle.id (its JRN-nnnnn code — that lifecycle's subject_id is the member's staff code)."
 
     - name: tail_hold
       membership: {kind: resource, property: holders}
@@ -510,7 +579,7 @@ source:
         joined_sim_time: timestamptz
         left_sim_time: timestamptz
       descriptions:
-        record_id: "The process instance the role is bound on; joins lifecycle.id."
+        record_id: "The process instance the role is bound on; joins lifecycle.id (its JRN-nnnnn code)."
         elem__role_name: "The role filled: dest, tail, captain_seat, fo_seat, or the roster roles closed_sign / my_station / new_station."
         member__entity__kind: "What kind of participant is bound: destination or asset."
         member__entity__id: "The bound participant; joins destination.id, aircraft.id, or duty_station.id (its DS-nnnn code), depending on role."

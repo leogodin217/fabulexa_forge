@@ -1,0 +1,82 @@
+# Recipe: fact-identity-via-thin-dim
+# ============================================================
+# Demonstrates how a FACT population's elected identity reaches other
+# tables: through a THIN DIM and fk edges — never through plain `from:`
+# on a member/reference column.
+#
+# The mechanic: a `keys:` election (record_id / record_index /
+# presentation_id) renders ONLY through fk edges and dim key columns.
+# A plain `from: member__<kind>__id` column — and every `lookup:`
+# surface — stays the raw engine record_id, whatever the election says.
+# So when a population's exported identity must appear on facts built
+# from OTHER grains (membership holds, waits, history intervals), give
+# that population a thin records-grain dim over its constant attributes
+# and have every fact reach it with `fk:` — `via: reference` from
+# records/history grains, `via: membership` + `member_field` from
+# membership grains. Without the dim, every member surface carries the
+# engine's record_id.
+#
+# Here: `patient` elects `record_index` (this fixture mints no
+# presentation keys; the rendering rule is identical for a
+# presentation_id election — see docs/examples/airline-ops/
+# dimensional.yaml, whose dim_scheduled_leg exists for exactly this).
+# The wait fact is membership grain over the queue's waiters:
+#   - patient_key        fk via membership -> renders the ELECTION (0, 1)
+#   - patient_record_id  plain from: on the member column -> stays raw
+#                        ('p001', 'p002'), the engine id — the contrast
+#                        this recipe exists to show
+#
+# Fixture world (recipe emit):
+#   records__patient            — p001 Alice (record_index 0),
+#                                 p002 Bob (record_index 1)
+#   membership__queue__waiters  — p001 waiting on q001 priority 2 (closed),
+#                                 p002 waiting priority 1 (open)
+#
+# Output:
+#   dim_patient     — 2 rows, keyed on the elected patient_key (0, 1)
+#   fact_queue_wait — 2 rows; patient_key renders the election through the
+#                     fk edge, patient_record_id shows the raw member id
+
+mode: dimensional
+
+keys:
+  patient: record_index
+
+dimensional:
+  tables:
+    # The thin dim: records grain over the population's constant
+    # attributes, keyed on the elected identity. This dim IS the
+    # election's rendering surface — every fact fk's into it.
+    - name: dim_patient
+      role: dim
+      scd: type1
+      source:
+        grain: records
+        kind: patient
+      key: [patient_key]
+      columns:
+        - name: patient_key
+          from: record_index
+        - name: patient_name
+          from: prop__name
+
+    - name: fact_queue_wait
+      role: fact
+      source:
+        grain: membership
+        kind: queue
+        property: waiters
+      key: [patient_key]
+      columns:
+        # The fk edge renders the elected identity: 0 / 1.
+        - name: patient_key
+          fk:
+            to: dim_patient
+            via: membership
+            member_field: patient   # member__patient__id (inferable)
+        # The SAME identity as a plain projection: stays the raw engine
+        # record_id ('p001' / 'p002') — elections do not reach `from:`.
+        - name: patient_record_id
+          from: member__patient__id
+        - name: priority
+          from: elem__priority

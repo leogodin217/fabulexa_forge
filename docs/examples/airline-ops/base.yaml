@@ -13,9 +13,11 @@
 # CALLED. The `rename` entries below relabel every table and column into the
 # carrier's vocabulary; base never splits a kind, so `actor` — crew members
 # AND flight legs in one table, discriminated by `unit_type` — lands as
-# `operating_unit`, and `resource` — tails AND duty stations, discriminated
+# `operating_unit`, `resource` — tails AND duty stations, discriminated
 # by `asset_type` — lands as `asset` (the same words source.yaml's
-# kind_labels use).
+# kind_labels use), and `entity` — the 12 destinations AND, since v3, the 2
+# operating bases with their IANA timezones, discriminated by
+# `airport_type` — lands as `airport`.
 #
 # We exclude ONE simulation-mechanism kind:
 #   queue — the four per-base pool-config records. The waits they govern are
@@ -23,14 +25,16 @@
 #           records-kind dump either way, and the config rows alone carry no
 #           current-state value here (source.yaml ships them as
 #           dispatch_pool, where pool_wait joins them).
-# tick_decision STAYS since realism v2 (as decision_log): it used to be a
-# pure mirror of the lifecycle history, but the v2 payday is instantaneous —
-# an instantaneous state never lands in the history (active -> payday ->
-# active at one instant collapses to no change) — so the engine's 408
+# tick_decision STAYS (as decision_log): the payday is instantaneous — an
+# instantaneous state never lands in the history (active -> payday -> active
+# at one instant collapses to no change) — so the engine's 859
 # payslip_issued decisions are the pay cadence's only surface. The other
-# seven decision types still mirror lifecycle entries, and `context` is the
-# empty JSON object on all 10,952 rows (measured); a raw landing dump
-# carries the log whole rather than second-guessing which rows matter.
+# nine decision types still mirror lifecycle entries, and since v3 every
+# row's `context` carries a JSON payload that MIRRORS the typed columns
+# (verified: the cancel decisions' context.reason equals the leg's typed
+# cancel_reason on all 119 rows — key on typed columns, never the JSON); a
+# raw landing dump carries the log whole rather than second-guessing which
+# rows matter.
 #
 # KEYS: declare_keys emits PK/UNIQUE constraints into the DuckDB dump,
 # resolved from the sidecar's presentation_keys registry — round-1 QA read a
@@ -116,8 +120,10 @@ base:
         prop__full_name: full_name
         prop__status: status
         prop__sickness_episodes: sickness_episodes
+        prop__duty_days: duty_days
         prop__bank: departure_bank
         prop__scheduled_departure: scheduled_departure
+        prop__cancel_reason: cancel_reason
         prop__destination: destination_id
         ref_index__destination: destination_key
         prop__flight_number: flight_number
@@ -140,45 +146,58 @@ base:
         prop__full_name: "Crew rows: the member's display name; NULL on leg rows."
         prop__status: "Crew rows: HR status (onboarding, active, notice, resigned); NULL on leg rows."
         prop__sickness_episodes: "Crew rows: sickness episodes recorded to date; NULL on leg rows."
+        prop__duty_days: "Crew rows: consecutive duty days since the last rostered day off — the 1-rest-day-in-7 legality counter (mustering requires five or fewer and increments it; a day off resets it); NULL on leg rows."
         prop__bank: "Leg rows: departure bank (am or pm); NULL on crew rows."
-        prop__scheduled_departure: "Leg rows: the scheduled departure instant, stamped when the leg's bank fires — pushback delay is anything after it; NULL on crew rows and on a leg still awaiting its bank."
-        prop__destination: "Leg rows: the planned destination, drawn at schedule entry; joins destination.id. NULL on crew rows."
-        ref_index__destination: "Leg rows: numeric key of the planned destination; joins destination.destination_key. NULL on crew rows."
+        prop__scheduled_departure: "Leg rows: the PUBLISHED departure instant — the leg's drawn 5-minute-grid slot plus the fixed 45-minute ops allowance, stamped at slotting. Ops release starts at the slot, so most flown legs push ahead of this time (negative delay vs plan is normal); scheduled arrival derives by joining the destination's matching sched_block_* minutes. NULL on crew rows and on a leg that has not drawn its slot."
+        prop__cancel_reason: "Leg rows: why the leg was scrubbed (weather, no_captain, no_fo, captain_sick, fo_sick, no_reserve_captain, no_reserve_fo); NULL on crew rows and on every leg that was not cancelled. The typed column consumers key on — decision_log.context only mirrors it."
+        prop__destination: "Leg rows: the planned destination, drawn at schedule entry; joins airport.id. NULL on crew rows."
+        ref_index__destination: "Leg rows: numeric key of the planned destination; joins airport.airport_key. NULL on crew rows."
         prop__flight_number: "Leg rows: the published flight number (FXnnn), one per (departure bank, destination) pair and reused across the quarter; NULL on crew rows."
         prop__route_number: "Leg rows: the carrier's route number for the destination (shared by the am and pm services); NULL on crew rows."
 
     - table: records__entity
-      name: destination
-      description: "An airport the carrier serves — the catalogue legs plan destinations from. Haul class and demand weighting are facts of the city pair, one column per origin base."
+      name: airport
+      description: "An airport in the carrier's world, discriminated by airport_type: the 12 destinations legs plan against (haul class, demand weighting, and published block minutes are facts of the city pair, one column per origin base) and the 2 operating bases, each carrying its IANA timezone — the handle for deriving station-local time from the ops-clock instants."
       columns:
-        record_index: destination_key
+        record_index: airport_key
         created_sim_time: created_at
-        prop__entity_type: destination_type
+        prop__entity_type: airport_type
         prop__code: airport_code
         prop__city: city
+        prop__timezone: timezone
         prop__class_from_cvg: route_class_from_cvg
         prop__class_from_slc: route_class_from_slc
         prop__popularity_cvg: popularity_cvg
         prop__popularity_slc: popularity_slc
+        prop__sched_block_cvg_out: sched_block_cvg_out
+        prop__sched_block_cvg_in: sched_block_cvg_in
+        prop__sched_block_slc_out: sched_block_slc_out
+        prop__sched_block_slc_in: sched_block_slc_in
       descriptions:
         record_id: "Unique identifier for the airport."
         record_index: "Unique numeric key for the airport, assigned in creation order."
         created_sim_time: "When the airport entered the network."
         active: "TRUE while the airport is served."
         deactivated_at: "When the airport left the network; NULL while served."
-        prop__entity_type: "What kind of catalogue row this is; every row here is a destination."
-        prop__code: "IATA three-letter airport code."
-        prop__city: "City the airport serves."
-        prop__class_from_cvg: "Haul class of the CVG service to this airport: short, medium, or long. Class is a fact of the city pair — SEA is long from CVG but medium from SLC."
-        prop__class_from_slc: "Haul class of the SLC service to this airport: short, medium, or long."
-        prop__popularity_cvg: "Relative demand weighting used when CVG legs plan a destination."
-        prop__popularity_slc: "Relative demand weighting used when SLC legs plan a destination."
+        prop__entity_type: "Whether this row is a destination (an airport legs fly to) or a base (an operating hub crew and tails are domiciled at)."
+        prop__code: "IATA three-letter airport code. On base rows it matches the base string crew, legs, and assets carry."
+        prop__city: "City the airport serves; NULL on base rows."
+        prop__timezone: "Base rows: the base's IANA timezone (America/New_York for CVG, America/Denver for SLC) — every exported instant is on the carrier's single ops clock; convert with this zone for station-local time. NULL on destination rows."
+        prop__class_from_cvg: "Destination rows: haul class of the CVG service to this airport (short, medium, or long — a fact of the city pair: SEA is long from CVG but medium from SLC); NULL on base rows."
+        prop__class_from_slc: "Destination rows: haul class of the SLC service to this airport; NULL on base rows."
+        prop__popularity_cvg: "Destination rows: relative demand weighting used when CVG legs plan a destination; NULL on base rows."
+        prop__popularity_slc: "Destination rows: relative demand weighting used when SLC legs plan a destination; NULL on base rows."
+        prop__sched_block_cvg_out: "Destination rows: published block minutes CVG -> this airport, 5-minute grid (a CVG leg's scheduled arrival = its scheduled_departure plus this column); NULL on base rows."
+        prop__sched_block_cvg_in: "Destination rows: published block minutes this airport -> CVG, 5-minute grid; NULL on base rows."
+        prop__sched_block_slc_out: "Destination rows: published block minutes SLC -> this airport, 5-minute grid (an SLC leg's scheduled arrival = its scheduled_departure plus this column); NULL on base rows."
+        prop__sched_block_slc_in: "Destination rows: published block minutes this airport -> SLC, 5-minute grid; NULL on base rows."
 
     - table: records__journey_instance
       name: lifecycle
       description: "One process instance — a leg's flight lifecycle, or a crew member's roster, sickness, or employment lifecycle — at its current state."
       columns:
         record_index: lifecycle_key
+        presentation_id: lifecycle_code
         created_sim_time: created_at
         prop__actor: subject_id
         ref_index__actor: subject_key
@@ -187,6 +206,7 @@ base:
       descriptions:
         record_id: "Unique identifier for the lifecycle record."
         record_index: "Unique numeric key for the lifecycle record, assigned in creation order."
+        presentation_id: "The lifecycle's journey code (JRN-nnnnn), minted upstream since v3 — the identity the curated exports present as id."
         created_sim_time: "When the process began."
         active: "TRUE while the process is running; FALSE once it reached a terminal state."
         deactivated_at: "When the process finished; NULL while running."
@@ -237,6 +257,7 @@ base:
       description: "The engine's per-firing decision log: one row per recorded operational decision (a leg planned or cancelled, a duty day started, a payslip issued, a sickness episode, a fault hold, a reserve callout, a hire completed). The payslip_issued rows are the pay cadence's only surface — the instantaneous payday never lands in the lifecycle history."
       columns:
         record_index: decision_key
+        presentation_id: decision_code
         created_sim_time: decided_at
         prop__journey_instance: lifecycle_id
         ref_index__journey_instance: lifecycle_key
@@ -245,10 +266,11 @@ base:
       descriptions:
         record_id: "Unique identifier for the decision."
         record_index: "Unique numeric key for the decision, assigned in creation order."
+        presentation_id: "The decision's code (DEC-nnnnnn), minted upstream since v3 — the identity the curated exports present as id."
         created_sim_time: "When the decision fired."
         active: "TRUE on every row — decisions are never retired."
         deactivated_at: "Always NULL — decisions are never retired."
         prop__journey_instance: "The process instance the decision belongs to; joins lifecycle.id."
         ref_index__journey_instance: "Numeric key of the owning process instance; joins lifecycle.lifecycle_key."
-        prop__decision_type: "Which decision this is: flight_planned, flight_cancelled, duty_started, payslip_issued, sickness_episode, fault_hold, reserve_callout, or hire_completed."
-        prop__context: "Decision-specific payload recorded at fire time; the empty JSON object on every row this quarter."
+        prop__decision_type: "Which decision this is: flight_planned, cancelled_crew, cancelled_weather, duty_started, payslip_issued, sickness_episode, fault_hold, reserve_callout_captain, reserve_callout_fo, or hire_completed."
+        prop__context: "Decision-specific JSON payload recorded at fire time. Every value mirrors a typed surface — the cancel decisions' reason equals operating_unit.cancel_reason — so key on the typed columns, not this JSON."
