@@ -1,63 +1,78 @@
 # StreamConfig — airline-ops bundle, CDC replay
 # ============================================================
 # Drives `fabulexa-forge stream` (and the mixer) over the airline-ops emit at
-# docs/examples/airline-ops/bundle/. Four kinds/populations -> four topics:
+# docs/examples/airline-ops/bundle/. Five kinds/populations -> five topics:
 # the ops lifecycle stream that carries the quarter's story, the schedule
-# feed, the crew HR stream, and the tail-occupancy stream.
+# feed, the crew HR stream, the tail-occupancy stream, and the payroll feed.
 #
 #   content: state-changes — `history` replayed as an ordered c/u/d CDC stream.
 #
 # VOCABULARY (parity with source.yaml): per-stream `kind_label` mirrors
-# source.yaml's table names (crew_member / flight_leg / lifecycle /
-# aircraft), payload renames mirror its column renames (subject_id, process,
-# destination_id, departure_bank), and `keys:` mirrors its elections — crew
-# and leg event keys are the staff codes (CRW-nnnn) and leg codes (LEG-nnnnn)
-# their state tables present as `id`, and lifecycle / aircraft event keys are
-# the same compact BIGINT serials their state tables present as `id` (neither
-# population mints a presentation code — this emit's record_id is the same
-# creation-order counter as VARCHAR, so there is no less-synthetic surface to
-# elect; flagged upstream for v3). Every stream renames its elected key
-# surface to `id`, so the wire carries the app database's column name, not
-# the engine's.
+# source.yaml's table names (crew_member / flight_leg / lifecycle / aircraft
+# / payroll_event), payload renames mirror its column renames (subject_id,
+# process, destination_id, departure_bank, lifecycle_id), and `keys:` mirrors
+# its elections — crew and leg event keys are the staff codes (CRW-nnnn) and
+# leg codes (LEG-nnnnn) their state tables present as `id`, and lifecycle /
+# aircraft / payroll event keys are the same compact BIGINT serials their
+# state tables present as `id` (none of those populations mints a
+# presentation code — this emit's record_id is the same creation-order
+# counter as VARCHAR, so there is no less-synthetic surface to elect; flagged
+# upstream for v3). Every stream renames its elected key surface to `id`, so
+# the wire carries the app database's column name, not the engine's.
 #
-# Declared streams:
-#   crew_member  — actor narrowed to its crew sub-type: the HR feed. Status
-#                  changes and sickness-episode increments over the flu wave,
-#                  plus the two mid-quarter hires' creates. The name columns
-#                  ride the payload so the feed reads like an HR system's.
-#   flight_leg   — actor narrowed to its flight sub-type: the schedule feed.
-#                  The leg's airline surface (flight number, route, planned
-#                  destination, base, departure bank) rides every event;
-#                  5,759 schedule-entry creates plus the close-out deletes
-#                  (the sub-type carries no tracked mutations, so there are
-#                  no `u` events — what HAPPENS to a leg is the lifecycle
-#                  stream's story).
+# Declared streams (event counts measured against THIS emit):
+#   crew_member  — actor narrowed to its crew sub-type: the HR feed (359
+#                  events). Status changes and sickness-episode increments
+#                  over the flu wave, plus the 13 mid-run hires' creates and
+#                  the resignations' deletes. The name columns ride the
+#                  payload so the feed reads like an HR system's.
+#   flight_leg   — actor narrowed to its flight sub-type: the schedule feed
+#                  (7,795 events). 2,601 schedule-entry creates, 2,597
+#                  scheduled-departure stamps as `u` events when each leg's
+#                  bank fires (new in realism v2 — the stamp is the
+#                  sub-type's one tracked mutation), and the close-out
+#                  deletes. The leg's airline surface (flight number, route,
+#                  planned destination, base, departure bank) rides every
+#                  event. KNOWN LIMIT: streaming admits no temporal render
+#                  election on payload values, so `scheduled_departure`
+#                  rides the wire as the producer's raw sim-instant (BIGINT
+#                  ns on the tape's clock) rather than a wallclock string —
+#                  the table exports render it; the wire cannot yet.
 #   lifecycle    — journey_instance is not sub-typed (journey_type is not a
 #                  `<kind>_type` discriminator domain), so one stream carries
-#                  all four processes; `process` on every payload says which,
-#                  exactly like source.yaml's lifecycle table. current_state
-#                  c/u/d IS the operational feed: schedule entries, pushback
-#                  waits, cancellations, duty days, sick calls.
-#   aircraft     — the tail fleet's occupancy flips (allocated 0 <-> 1) and
-#                  the per-tail capacity record, with the registration riding
-#                  the payload. duty_station occupancy is left to the
-#                  lifecycle stream's roster process rather than doubled as a
-#                  fifth topic.
+#                  all four processes (50,262 events); `process` on every
+#                  payload says which, exactly like source.yaml's lifecycle
+#                  table. current_state c/u/d IS the operational feed:
+#                  schedule entries, boarding, blocks and turns, duty days,
+#                  days off, sick calls, cancellations.
+#   aircraft     — the tail fleet's occupancy flips (allocated 0 <-> 1, 5,194
+#                  events) and the per-tail capacity record, with the
+#                  registration riding the payload. duty_station occupancy is
+#                  left to the lifecycle stream's roster process rather than
+#                  doubled as a sixth topic.
+#   payroll      — tick_decision narrowed to payslip_issued (408 creates):
+#                  the pay cadence's only surface, since v2's instantaneous
+#                  payday never lands in the lifecycle history (a state
+#                  entered and left at one instant collapses to no change).
+#                  The other decision types mirror lifecycle entries and are
+#                  not streamed.
 #
 # CLOCK: the `rebase:` block declares the carrier's operations clock — the
-# same declaration as the three table configs. Origin repinned to local
-# midnight in America/Phoenix (a real US ops zone, no DST, so the daily
-# cadence holds the same wall clock all quarter); `grain: minute` truncates
-# each event's `ts` to whole minutes — real feeds are minute-grained at
-# best, and microsecond `ts` was round-1 QA's fastest synthetic tell. Event
-# order, `seq`, and the full-ns `event_sim_time` key are untouched.
+# same declaration as the three table configs. The emit's anchor is
+# 2026-01-05T00:00:00 UTC (an eight-week burn-in, then the published quarter
+# from 2026-03-02); the origin is repinned to local midnight in
+# America/Phoenix (a real US ops zone, no DST, so the daily cadence holds
+# the same wall clock all the way); `grain: minute` truncates each event's
+# `ts` to whole minutes — real feeds are minute-grained at best, and
+# microsecond `ts` was round-1 QA's fastest synthetic tell. Event order,
+# `seq`, and the full-ns `event_sim_time` key are untouched.
 # Bootstrap is supplied at the CLI (`--bootstrap-servers ...`) when the sink
 # is kafka.
 
 content: state-changes
 
 rebase:
-  base_date: 2026-03-02
+  base_date: 2026-01-05
   timezone: America/Phoenix
   grain: minute
 
@@ -65,6 +80,7 @@ keys:
   actor: presentation_id
   journey_instance: record_index
   resource: record_index
+  tick_decision: record_index
 
 streams:
   - name: crew_member
@@ -77,7 +93,8 @@ streams:
   - name: flight_leg
     kind: actor
     sub_types: [flight]
-    properties: [flight_number, route_number, destination, base, bank]
+    properties: [flight_number, route_number, destination, base, bank,
+                 scheduled_departure]
     rename:
       presentation_id: id
       destination: destination_id
@@ -98,3 +115,11 @@ streams:
     rename:
       record_index: id
     kind_label: aircraft
+  - name: payroll
+    kind: tick_decision
+    where: {decision_type: payslip_issued}
+    properties: [journey_instance, decision_type]
+    rename:
+      record_index: id
+      journey_instance: lifecycle_id
+    kind_label: payroll_event
