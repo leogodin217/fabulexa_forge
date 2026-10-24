@@ -2083,9 +2083,50 @@ def _validate_event_property_name(
         )
 
 
+def _partition_attributed_columns(
+    sidecar: "Sidecar",
+    kind: str,
+    populations: "tuple[Population, ...]",
+) -> "frozenset[str] | None":
+    """Value columns attributed to the source's addressed sub-types, unioned.
+
+    The per-item-type changeset boundary: a sub-typed kind's records table
+    materializes the union of every sub-type's columns, so a sub-type-narrowed
+    events source reading the whole column list would carry other sub-types'
+    structurally inapplicable fields as `[null, null]` changeset entries.
+    The sidecar's `sub_type_columns` partition names which value columns each
+    sub-type declares; this is the union over the source's addressed atoms.
+    None signals 'do not narrow' (union-schema fallback): the partition is
+    absent (an older emit), an addressed atom is flat, or the partition does
+    not cover it.
+
+    Args:
+        sidecar: The open emit's sidecar.
+        kind: The audited kind.
+        populations: The source's resolved addressed atoms.
+
+    Returns:
+        The attributed column-name union, or None when the partition does
+        not cover the address.
+    """
+    partition = sidecar.sub_type_columns()
+    if partition is None:
+        return None
+    owned: set[str] = set()
+    for population in populations:
+        if population.sub_type is None:
+            return None
+        try:
+            owned.update(partition.columns_for(kind, population.sub_type))
+        except KeyError:
+            return None
+    return frozenset(owned)
+
+
 def _resolve_records_audited_properties(
     sidecar: "Sidecar",
     kind: str,
+    populations: "tuple[Population, ...]",
     only: "tuple[str, ...] | None",
     ignore: "tuple[str, ...] | None",
     owner: str,
@@ -2094,13 +2135,23 @@ def _resolve_records_audited_properties(
     """The audited property set for one records events source.
 
     Every tracked- and constant-class property (the exempt discriminator
-    included despite a slice_only class), narrowed by `only` or
-    widened-by-subtraction via `ignore`. Every other non-exempt slice_only
-    property is policy-omitted with one notice.
+    included despite a slice_only class) **attributed to the source's
+    addressed sub-types** (`_partition_attributed_columns`; the kind-wide
+    discriminator is kept despite the partition's carve-out; union-schema
+    fallback when the partition does not cover the address), narrowed by
+    `only` or widened-by-subtraction via `ignore`. An `only` entry is the
+    author's explicit audited set, so it overrides the partition narrowing —
+    a named property outside the addressed sub-types' attribution stays
+    audited. Every other non-exempt slice_only property is policy-omitted
+    with one notice; partition narrowing is silent — a structurally
+    inapplicable column carries no data for the addressed sub-types, so
+    nothing is lost.
 
     Args:
         sidecar: The open emit's sidecar.
         kind: The audited kind.
+        populations: The source's resolved addressed atoms (partition
+            narrowing).
         only: The source's `only` entry, or None.
         ignore: The source's `ignore` entry, or None.
         owner: The declaring events source's message label.
@@ -2132,6 +2183,14 @@ def _resolve_records_audited_properties(
             _validate_event_property_name(name, all_bare_set, sidecar, kind, owner)
         selected = frozenset(only)
         return tuple(c for c in candidates if c in selected)
+
+    attributed = _partition_attributed_columns(sidecar, kind, populations)
+    if attributed is not None:
+        candidates = [
+            c
+            for c in candidates
+            if c == f"{kind}_type" or f"{_PROP_PREFIX}{c}" in attributed
+        ]
     if ignore is not None:
         for name in ignore:
             _validate_event_property_name(name, all_bare_set, sidecar, kind, owner)
@@ -2540,7 +2599,7 @@ def _build_event_source_plan(
         populations = resolve_populations(sidecar, owner, kind, decl.sub_types)
         source_table = f"{RECORDS_TABLE_PREFIX}{kind}"
         audited = _resolve_records_audited_properties(
-            sidecar, kind, decl.only, decl.ignore, owner, notice_sink
+            sidecar, kind, populations, decl.only, decl.ignore, owner, notice_sink
         )
         all_bare_names = _scalar_properties(sidecar, source_table)
         audited_pairs = _apply_records_property_rename(
