@@ -22,4 +22,4 @@ tables:
         event: create
       - item_type: admission
         item_id: a002
-        event: destroy
+        event: update

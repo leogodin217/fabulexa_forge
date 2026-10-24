@@ -1351,7 +1351,7 @@ def build_events_test_emit(tmp_path: Path) -> Path:
               "exactly the differing entries" and "coincident changes
               coalesce" (elsewhere, via `visit` in `build_source_test_emit`).
           t002 (bug): created@100ms status=open priority=2 assignee=agent_b;
-              no further changes; deactivated@180ms — a destroy whose "last
+              no further changes; deactivated@180ms — a deactivation whose "last
               value" is the creation after-image.
           t003 (feature): created@120ms status=pending priority=9,
               assignee=NULL; never changes; stays active — excluded when a
@@ -1498,13 +1498,14 @@ def build_event_tie_test_emit(tmp_path: Path) -> Path:
     SAME sim_time yields two fold events at one instant, so the lag window's
     ORDER BY must break the tie on `event_class` — ordering on
     `event_sim_time` alone leaves the two orderable either way, and the swap
-    silently corrupts both before-images (the update reads the destroy's
-    nulled after-image, the destroy reads the pre-update value).
+    silently corrupts the payload update's before-image (it would read the
+    `d` row's nulled after-image).
 
     - records__ticket: t900 (bug), tracked. created@100ms status=open
         priority=1; status changes to 'closed' @150ms; deactivated@150ms —
         the tie. The only correct chain is create [None, 'open'],
-        update ['open', 'closed'], destroy ['closed', None].
+        update ['open', 'closed'], then the deactivation update writing the
+        soft-delete pair.
     - records__agent: agent_a, the reference target of prop__assignee_id.
 
     Args:

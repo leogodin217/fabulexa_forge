@@ -90,6 +90,14 @@ EVENT_LOG_COLUMNS: tuple[str, ...] = (
     "changes",
 )
 
+#: The deactivation changeset's fixed keys — the log's published rendering of
+#: a record's end-of-life (doc § The event log — the deactivation changeset).
+#: The state render's soft-delete pair under its default output names:
+#: mode-definitional, outside the audited property set and outside
+#: `only` / `ignore` / `rename` reach. `plan.py` includes both in a records
+#: source's `changes`-key collision population (`SourceNameCollision`).
+DEACTIVATION_CHANGES_KEYS: tuple[str, str] = ("active", "deactivated_at")
+
 
 _ELECTION_SOURCE_TYPE: "dict[type, str]" = {
     DecimalElection: "DOUBLE",
@@ -714,20 +722,31 @@ def _build_records_arm_sql(
 
     Composes `build_row_state_events_sql`, narrowed per row to the
     selection spine (`source.populations` AND `source.where` — doc § Row
-    selection) via `_narrow_fold_by_spine_sql`; recodes op c/u/d ->
-    create/update/destroy. Old values are a per-record LAG over
+    selection) via `_narrow_fold_by_spine_sql`; recodes op c -> create and
+    u/d -> update — a `d` is the record's deactivation, and the state
+    render's lifecycle is soft-delete, so the log renders it as the UPDATE
+    the application actually wrote (doc § The event log — the deactivation
+    changeset), never a `destroy` beside a persisting row. Old values are a
+    per-record LAG over
     the fold's own audited after-images (translated first where a change
     edge applies), ordered by `(event_sim_time, event_class)` — the fold's
     own canonical order, and total within a record because the fold emits at
     most one event per (record_id, event_sim_time, event_class). Ordering on
     `event_sim_time` alone would be non-deterministic: a record whose update
     and deactivation land on the same sim_time has two events at that
-    instant, and swapping them silently corrupts both before-images.
+    instant, and swapping them silently corrupts the payload update's
+    before-image (it would read the `d` row's nulled after-image).
     `changes` is the full object (`build_changes_object_expr`)
-    for create/destroy rows, the differing-only object
+    for create rows, the differing-only object
     (`_build_diff_changes_expr`) for update rows — an update row touching no
-    audited property is dropped, keyed by each pair's resolved `changes`
-    output key. Every audited property's `changes` value is its raw lag
+    audited property is dropped — and, for a deactivation row, exactly the
+    soft-delete pair (`DEACTIVATION_CHANGES_KEYS`): `active`
+    `["true","false"]` and `deactivated_at` `[null, <text>]`, the text the
+    log's elected instant rendering of the row's own `event_sim_time` in the
+    pinned in-JSON form — the fields deactivation writes and nothing else
+    (payload properties are untouched by a soft delete). Payload entries are
+    keyed by each pair's resolved `changes` output key. Every audited
+    property's `changes` value is its raw lag
     pair unless `source.render` carries an entry for it, in which case both
     the old and new values render through `_render_elected_changes_value_sql`
     (doc § Event-log and after-image reach) — the diff's own comparison
@@ -827,12 +846,40 @@ def _build_records_arm_sql(
         tuple((key, out_old, out_new) for key, _ro, _rn, out_old, out_new in entries_t)
     )
     diff_expr = _build_diff_changes_expr(entries_t)
+
+    # The deactivation changeset (doc § The event log — the deactivation
+    # changeset): the soft-delete pair, nothing else. `deactivated_at`'s new
+    # value is the row's own instant (the fold's `d` event sits at the base
+    # `deactivated_at` value) in the log's elected rendering, pinned to the
+    # in-JSON text form; `active`'s pair is the CAST-AS-VARCHAR boolean text
+    # the contract's C7 biconditional fixes (`deactivated_at` NULL iff
+    # `active`).
+    deactivated_native = _strip_output_alias(
+        render_anchor_temporal_expr(
+            anchor, '"_lagged"."event_sim_time"', _BARE_EXPR_ALIAS, render
+        )
+    )
+    deactivated_zone = str(anchor.timezone) if render == "timestamptz" else None
+    deactivated_text = _pinned_temporal_text_sql(
+        deactivated_native, _INSTANT_DENOTED_TYPE[render], deactivated_zone
+    )
+    active_key, deactivated_key = DEACTIVATION_CHANGES_KEYS
+    deactivation_expr = build_changes_object_expr(
+        (
+            (active_key, "'true'", "'false'"),
+            (deactivated_key, "CAST(NULL AS VARCHAR)", deactivated_text),
+        )
+    )
+
     changes_expr = (
-        f'CASE WHEN "_lagged"."op" = \'u\' THEN {diff_expr} ELSE {full_expr} END'
+        f'CASE "_lagged"."op"'
+        f" WHEN 'u' THEN {diff_expr}"
+        f" WHEN 'd' THEN {deactivation_expr}"
+        f" ELSE {full_expr} END"
     )
     event_expr = (
         "CASE \"_lagged\".\"op\" WHEN 'c' THEN 'create' WHEN 'u' THEN 'update'"
-        " WHEN 'd' THEN 'destroy' END"
+        " WHEN 'd' THEN 'update' END"
     )
 
     events_select = (
@@ -1087,15 +1134,21 @@ def build_event_log_sql(
     Per records source: composes `build_row_state_events_sql(sidecar,
     fork_path, kind, frozenset(bare names of audited_properties))`,
     narrowed per row to the source's populations through the records-spine
-    discriminator; recodes op c/u/d -> create/update/destroy. Per
+    discriminator; recodes op c -> create and u/d -> update — a `d` is the
+    record's deactivation, rendered as the soft-delete UPDATE (doc § The
+    event log — the deactivation changeset), `destroy` being reserved for
+    an item the source shape actually drops. Per
     membership source: composes `build_membership_events_sql(sidecar,
     fork_path, owner_kind, property, bare field names)` (join -> create,
-    leave -> destroy). Old values are a per-record lag over the fold's own
+    leave -> destroy — the association itself ends). Old values are a
+    per-record lag over the fold's own
     audited after-images; `changes` is the design-doc JSON changeset
     (create: [null, v] for every audited property; update: exactly the
-    differing entries, all-equal rows suppressed; destroy: [last, null];
-    empty audited set: '{}'), keyed by each `audited_properties` pair's
-    resolved output key (sidecar column-declaration order — rename
+    differing entries, all-equal rows suppressed; deactivation: exactly the
+    soft-delete pair `active` ["true","false"] / `deactivated_at`
+    [null, <elected pinned text>];
+    empty audited set: '{}' on create), keyed by each `audited_properties`
+    pair's resolved output key (sidecar column-declaration order — rename
     relabels, never reorders), values the folds' CAST-AS-VARCHAR
     after-image strings verbatim or null, assembled via
     `build_changes_object_expr`. A property carrying a `source.render`

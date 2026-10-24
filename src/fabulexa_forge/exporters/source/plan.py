@@ -130,6 +130,7 @@ from fabulexa_forge.exporters.slice_only import (
 )
 from fabulexa_forge.exporters.source.columns import _PROP_PREFIX, _scalar_properties
 from fabulexa_forge.exporters.source.events import (
+    DEACTIVATION_CHANGES_KEYS,
     SourceEventLogPlan,
     SourceEventSourcePlan,
 )
@@ -2587,7 +2588,9 @@ def _build_event_source_plan(
         SourceColumnUnresolved, SourceSliceOnlyRead: An `only` / `ignore` /
             `rename` entry is unresolved.
         SourceNameCollision: Two audited properties (or a membership pair's
-            expanded `_kind` / `_id` names) resolve one `changes` key.
+            expanded `_kind` / `_id` names) resolve one `changes` key — a
+            records source's key surface including the fixed deactivation
+            changeset keys (`DEACTIVATION_CHANGES_KEYS`).
         SourceWhereColumnUnresolved, SourceWhereNotConstant,
             SourceWhereOnDiscriminator, SourceWhereValueUncastable: `where`
             resolution fails (the constant-column gate).
@@ -2605,8 +2608,14 @@ def _build_event_source_plan(
         audited_pairs = _apply_records_property_rename(
             audited, decl.rename, all_bare_names, sidecar, kind, owner
         )
+        # A records source's final `changes`-key surface includes the fixed
+        # deactivation changeset keys (doc § The event log — the deactivation
+        # changeset): an audited property's output key colliding with the
+        # soft-delete pair is refused here, resolvable by renaming the
+        # property.
         _check_source_changes_key_collision(
-            owner, tuple(output for _, output in audited_pairs)
+            owner,
+            tuple(output for _, output in audited_pairs) + DEACTIVATION_CHANGES_KEYS,
         )
         change_edges = _resolve_records_change_edges(
             sidecar, election, source_table, audited, known_kinds_set, owner

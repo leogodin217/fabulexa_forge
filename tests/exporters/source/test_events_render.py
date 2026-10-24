@@ -200,11 +200,11 @@ class TestBuildChangesObjectExpr:
 
 
 # ---------------------------------------------------------------------------
-# Records source: create / update / destroy
+# Records source: create / update / deactivation
 # ---------------------------------------------------------------------------
 
 
-class TestRecordsSourceCreateUpdateDestroy:
+class TestRecordsSourceCreateUpdateDeactivation:
     def _log(self) -> SourceEventLogPlan:
         source = _ticket_source(
             ("ticket_type", "status", "priority", "assignee_id"),
@@ -261,7 +261,13 @@ class TestRecordsSourceCreateUpdateDestroy:
         for changes in by_changes:
             assert "ticket_type" not in changes
 
-    def test_destroy_last_value_and_item_id_never_null(self, tmp_path: Path) -> None:
+    def test_deactivation_is_an_update_writing_the_soft_delete_pair(
+        self, tmp_path: Path
+    ) -> None:
+        """A record's end-of-life is an `update` writing exactly the
+        soft-delete pair — the state render's lifecycle story — never a
+        `destroy` beside a persisting state row; payload properties carry
+        no entry, and `item_id` still resolves through the identity join."""
         emit_dir = build_events_test_emit(tmp_path)
         with open_emit(emit_dir) as emit:
             fork_path = require_single_branch(emit.sidecar)
@@ -270,13 +276,12 @@ class TestRecordsSourceCreateUpdateDestroy:
             sql = build_event_log_sql(emit.sidecar, fork_path, self._log(), anchor)
             rows = _rows(emit, sql)
 
-        t002_destroy = _row_for(rows, "t002", "destroy")
-        assert t002_destroy["item_id"] is not None
-        assert _changes(t002_destroy) == {
-            "ticket_type": ["bug", None],
-            "status": ["open", None],
-            "priority": ["2", None],
-            "assignee_id": ["1", None],
+        assert not [r for r in rows if r["event"] == "destroy"]
+        t002_deactivation = _row_for(rows, "t002", "update")
+        assert t002_deactivation["item_id"] is not None
+        assert _changes(t002_deactivation) == {
+            "active": ["true", "false"],
+            "deactivated_at": [None, "2024-01-01 00:00:00.180000"],
         }
 
 
@@ -303,7 +308,7 @@ class TestSubTypesNarrowedRecordsSource:
 # ---------------------------------------------------------------------------
 # `where` narrowing (source-row-selection sprint § Phase 3, doc § Row
 # selection): the fold input narrows to the selection spine; every event of
-# an excluded record/owner is excluded, create and destroy (join/leave)
+# an excluded record/owner is excluded, create and deactivation (join/leave)
 # alike.
 # ---------------------------------------------------------------------------
 
@@ -313,8 +318,8 @@ class TestWhereNarrowedRecordsSource:
         self, tmp_path: Path
     ) -> None:
         """Only the satisfying record's events remain — its own create and
-        destroy both included; the excluded records' events (including
-        their own destroy) are entirely absent."""
+        deactivation update both included; the excluded records' events
+        (including their own deactivation) are entirely absent."""
         where = (
             WhereEntry(
                 key="assignee_id",
@@ -337,7 +342,7 @@ class TestWhereNarrowedRecordsSource:
             rows = _rows(emit, sql)
 
         assert {r["item_id"] for r in rows} == {"t002"}
-        assert {r["event"] for r in rows} == {"create", "destroy"}
+        assert {r["event"] for r in rows} == {"create", "update"}
 
     def test_predicated_property_need_not_be_audited(self, tmp_path: Path) -> None:
         """`where` is orthogonal to the audited property set: a property may
@@ -431,7 +436,13 @@ class TestWhereNarrowedMembershipSource:
 
 
 class TestEmptyAuditedSet:
-    def test_create_and_destroy_use_empty_object(self, tmp_path: Path) -> None:
+    def test_create_empty_object_deactivation_still_carries_the_pair(
+        self, tmp_path: Path
+    ) -> None:
+        """With an empty audited set, a create emits `{}` (the lifecycle
+        event is itself information) while the deactivation update still
+        carries the soft-delete pair — it is the event's own content, not
+        an audited-set projection."""
         source = _ticket_source(
             (), sub_types=("bug",), item_surface=(("bug", "record_id"),)
         )
@@ -445,11 +456,14 @@ class TestEmptyAuditedSet:
             assert anchor is not None
             sql = build_event_log_sql(emit.sidecar, fork_path, log, anchor)
             rows = _rows(emit, sql)
-        assert not [r for r in rows if r["event"] == "update"]
+        assert not [r for r in rows if r["event"] == "destroy"]
         t002_create = _row_for(rows, "t002", "create")
-        t002_destroy = _row_for(rows, "t002", "destroy")
+        t002_deactivation = _row_for(rows, "t002", "update")
         assert t002_create["changes"] == "{}"
-        assert t002_destroy["changes"] == "{}"
+        assert _changes(t002_deactivation) == {
+            "active": ["true", "false"],
+            "deactivated_at": [None, "2024-01-01 00:00:00.180000"],
+        }
 
 
 class TestItemIdTypeRule:
@@ -536,9 +550,9 @@ class TestTotalOrderTieFree:
     def test_coincident_event_sim_time_broken_by_item_type(
         self, tmp_path: Path
     ) -> None:
-        """t002's records destroy and t001's watchers 'fyi' join both land at
-        event_sim_time=180ms; `item_type` ('ticket' < 'ticket.watchers')
-        must break the tie deterministically."""
+        """t002's deactivation update and t001's watchers 'fyi' join both
+        land at event_sim_time=180ms; `item_type` ('ticket' <
+        'ticket.watchers') must break the tie deterministically."""
         ticket_source = _ticket_source(("status",))
         watchers_source = _watchers_source()
         log = SourceEventLogPlan(
@@ -555,12 +569,12 @@ class TestTotalOrderTieFree:
             sql = build_event_log_sql(emit.sidecar, fork_path, log, anchor)
             rows = _rows(emit, sql)
 
-        t002_destroy_idx = next(
+        t002_deactivation_idx = next(
             i
             for i, r in enumerate(rows)
             if r["item_type"] == "ticket"
             and r["item_id"] == "t002"
-            and r["event"] == "destroy"
+            and r["event"] == "update"
         )
         fyi_create_idx = next(
             i
@@ -571,9 +585,10 @@ class TestTotalOrderTieFree:
         )
         # Both events genuinely coincide on event_sim_time (180ms).
         assert (
-            rows[t002_destroy_idx]["occurred_at"] == rows[fyi_create_idx]["occurred_at"]
+            rows[t002_deactivation_idx]["occurred_at"]
+            == rows[fyi_create_idx]["occurred_at"]
         )
-        assert t002_destroy_idx < fyi_create_idx
+        assert t002_deactivation_idx < fyi_create_idx
 
 
 # ---------------------------------------------------------------------------
@@ -649,28 +664,33 @@ class TestEventLogId:
             sql = build_event_log_sql(emit.sidecar, fork_path, log, anchor)
             rows = _rows(emit, sql)
 
-        # No no-op update survives: exactly one 'update' row for t600.
+        # No no-op update survives: the kept payload update and the
+        # deactivation update, nothing between them.
         updates = [r for r in rows if r["item_id"] == "t600" and r["event"] == "update"]
-        assert len(updates) == 1
+        assert len(updates) == 2
         assert _changes(updates[0]) == {"status": ["open", "closed"]}
+        assert _changes(updates[1]) == {
+            "active": ["true", "false"],
+            "deactivated_at": [None, "2024-01-01 00:00:00.250000"],
+        }
 
         ids = [r["id"] for r in rows]
         assert ids == list(range(1, len(rows) + 1))
 
 
 # ---------------------------------------------------------------------------
-# Before-image ordering: coincident update and destroy
+# Before-image ordering: coincident update and deactivation
 # ---------------------------------------------------------------------------
 
 
-class TestCoincidentUpdateAndDestroy:
+class TestCoincidentUpdateAndDeactivation:
     """A record whose change and deactivation share one sim_time.
 
     The fold emits two events at that instant (event_class 1 and 2). The
     before-image LAG must break the tie on `event_class`; ordering on
     `event_sim_time` alone leaves the pair orderable either way, and the
-    swap corrupts BOTH rows — the update reads the destroy's nulled
-    after-image, the destroy reads the pre-update value.
+    swap corrupts the payload update — it would read the `d` row's nulled
+    after-image as its before-image.
     """
 
     @staticmethod
@@ -698,8 +718,17 @@ class TestCoincidentUpdateAndDestroy:
             "the before-image LAG must carry a total order within a record"
         )
 
+    @staticmethod
+    def _t900_updates(rows: list[dict[str, object]]) -> list[dict[str, object]]:
+        """t900's two coincident update rows, emitted order: the payload
+        update first (event_class 1), the deactivation second (2)."""
+        updates = [r for r in rows if r["item_id"] == "t900" and r["event"] == "update"]
+        assert len(updates) == 2
+        return updates
+
     def test_before_images_chain_through_the_tied_pair(self, tmp_path: Path) -> None:
-        """create -> update -> destroy each carry the prior committed value."""
+        """create -> update -> deactivation: the payload update carries the
+        prior committed value, never the `d` row's nulled after-image."""
         emit_dir = build_event_tie_test_emit(tmp_path)
         with open_emit(emit_dir) as emit:
             fork_path = require_single_branch(emit.sidecar)
@@ -709,14 +738,16 @@ class TestCoincidentUpdateAndDestroy:
             rows = _rows(emit, sql)
 
         assert _changes(_row_for(rows, "t900", "create")) == {"status": [None, "open"]}
-        assert _changes(_row_for(rows, "t900", "update")) == {
-            "status": ["open", "closed"]
-        }
-        assert _changes(_row_for(rows, "t900", "destroy")) == {
-            "status": ["closed", None]
+        payload_update, deactivation = self._t900_updates(rows)
+        assert _changes(payload_update) == {"status": ["open", "closed"]}
+        assert _changes(deactivation) == {
+            "active": ["true", "false"],
+            "deactivated_at": [None, "2024-01-01 00:00:00.150000"],
         }
 
-    def test_the_update_and_destroy_do_share_an_instant(self, tmp_path: Path) -> None:
+    def test_the_update_and_deactivation_do_share_an_instant(
+        self, tmp_path: Path
+    ) -> None:
         """Guards the fixture itself: without the tie the test above is vacuous."""
         emit_dir = build_event_tie_test_emit(tmp_path)
         with open_emit(emit_dir) as emit:
@@ -726,10 +757,9 @@ class TestCoincidentUpdateAndDestroy:
             sql = build_event_log_sql(emit.sidecar, fork_path, self._log(), anchor)
             rows = _rows(emit, sql)
 
-        assert (
-            _row_for(rows, "t900", "update")["occurred_at"]
-            == _row_for(rows, "t900", "destroy")["occurred_at"]
-        )
+        payload_update, deactivation = self._t900_updates(rows)
+        assert payload_update["occurred_at"] == deactivation["occurred_at"]
+        assert payload_update["id"] < deactivation["id"]
 
 
 # ---------------------------------------------------------------------------
@@ -742,8 +772,9 @@ class TestRenamedRecordsProperty:
         self, tmp_path: Path
     ) -> None:
         """A `rename`d bare property's `changes` entry uses the output key
-        in create, update, and destroy rows; key order stays the given
-        `audited_properties` order — rename relabels, never reorders."""
+        in create and update rows; key order stays the given
+        `audited_properties` order — rename relabels, never reorders. The
+        deactivation changeset's fixed keys are outside rename's reach."""
         source = _ticket_source(
             ("ticket_type", "status", "priority", "assignee_id"),
             rename={"priority": "level"},
@@ -779,8 +810,11 @@ class TestRenamedRecordsProperty:
         for r in t001_updates:
             assert "priority" not in _changes(r)
 
-        t002_destroy = _row_for(rows, "t002", "destroy")
-        assert _changes(t002_destroy)["level"] == ["2", None]
+        t002_deactivation = _row_for(rows, "t002", "update")
+        assert _changes(t002_deactivation) == {
+            "active": ["true", "false"],
+            "deactivated_at": [None, "2024-01-01 00:00:00.180000"],
+        }
 
 
 class TestRenamedMembershipField:
@@ -1002,12 +1036,12 @@ class TestResolvedItemTypeOrdering:
             sql = build_event_log_sql(emit.sidecar, fork_path, log, anchor)
             rows = _rows(emit, sql)
 
-        t002_destroy_idx = next(
+        t002_deactivation_idx = next(
             i
             for i, r in enumerate(rows)
             if r["item_type"] == "zzz_ticket"
             and r["item_id"] == "t002"
-            and r["event"] == "destroy"
+            and r["event"] == "update"
         )
         fyi_create_idx = next(
             i
@@ -1018,11 +1052,12 @@ class TestResolvedItemTypeOrdering:
         )
         # Both events genuinely coincide on event_sim_time (180ms).
         assert (
-            rows[t002_destroy_idx]["occurred_at"] == rows[fyi_create_idx]["occurred_at"]
+            rows[t002_deactivation_idx]["occurred_at"]
+            == rows[fyi_create_idx]["occurred_at"]
         )
         # Flipped from the natural-name case (TestTotalOrderTieFree): 'ticket'
         # < 'ticket.watchers' but 'zzz_ticket' > 'ticket.watchers'.
-        assert fyi_create_idx < t002_destroy_idx
+        assert fyi_create_idx < t002_deactivation_idx
 
 
 # ---------------------------------------------------------------------------

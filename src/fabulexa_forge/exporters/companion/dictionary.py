@@ -103,7 +103,8 @@ _MEMBERSHIP_TABLE_PREFIX = "membership__"
 #: `TableReport` marked `event_log=True`.
 _EVENT_LOG_TABLE_DESCRIPTION = (
     "The change log: one row per change to an audited item — a creation, an"
-    " update, or a deletion — in event order."
+    " update (a record's deactivation included), or a membership's removal"
+    " — in event order."
 )
 
 _EVENT_LOG_COLUMN_DESCRIPTIONS: "dict[str, str]" = {
@@ -119,7 +120,12 @@ _EVENT_LOG_COLUMN_DESCRIPTIONS: "dict[str, str]" = {
         "Identifier of the changed item, scoped by item_type: one item"
         " keeps one identifier across its rows."
     ),
-    "event": "What happened to the item: 'create', 'update', or 'destroy'.",
+    "event": (
+        "What happened to the item: 'create', 'update', or 'destroy'. A"
+        " record's deactivation is an 'update' writing the soft-delete pair"
+        " (active, deactivated_at); 'destroy' marks a membership leaving its"
+        " collection."
+    ),
     "occurred_at": (
         "When the change took effect. Changes are logged in order, so this"
         " never decreases as id ascends."
@@ -127,7 +133,7 @@ _EVENT_LOG_COLUMN_DESCRIPTIONS: "dict[str, str]" = {
     "changes": (
         "JSON object of the fields this change touched, each mapped to an"
         " [old, new] value pair — old is null on a creation, new is null on"
-        " a deletion."
+        " a membership leave."
     ),
 }
 
