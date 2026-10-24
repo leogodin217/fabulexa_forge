@@ -1,0 +1,23 @@
+delay_code,delay_group,description
+11,passenger,Late check-in: acceptance of passengers after the deadline
+15,passenger,Boarding: discrepancies and paging; missing checked-in passengers
+18,passenger,Baggage processing: sorting or loading error
+31,ramp,Aircraft documentation late or inaccurate
+32,ramp,Loading or unloading: bulky or special load
+34,ramp,Servicing equipment: lack of staff or equipment
+36,ramp,Fuelling or defuelling: late delivery
+41,technical,Aircraft defects: technical fault found at or before departure
+42,technical,Scheduled maintenance: late release from planned work
+46,technical,Aircraft change for technical reasons
+61,flight_ops_crew,Flight plan: late completion or change of flight documentation
+63,flight_ops_crew,Late crew boarding or departure procedures: cockpit crew
+64,flight_ops_crew,Flight deck crew shortage: sickness or awaiting standby
+65,flight_ops_crew,Flight deck crew special request not within operational requirements
+71,weather,Departure station weather below operating limits
+73,weather,Enroute or alternate weather requiring extra fuel or rerouting
+75,weather,De-icing of aircraft: removal of ice or snow
+81,air_traffic,ATFM due to ATC enroute demand or capacity
+83,air_traffic,ATFM due to restriction at destination airport
+93,reactionary,Aircraft rotation: late arrival of aircraft from another flight
+94,reactionary,Cabin crew rotation: awaiting crew from another flight
+95,reactionary,Crew rotation: awaiting flight deck crew from another flight

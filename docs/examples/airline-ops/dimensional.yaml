@@ -72,13 +72,15 @@
 #            per-process queries. The subject renders as TWO fk columns
 #            (leg_code on flight rows, crew_code on the rest — each NULL
 #            outside its population, by construction). The key is
-#            [leg_code, crew_code, process, entered_at]: (subject, process)
-#            identifies a journey 1:1 in this emit (verified — zero
-#            duplicate (actor, journey_type) pairs) and a journey's change
-#            instants are strictly increasing, so no engine journey id is
-#            needed or carried. Pushback delay IS this table: time in
-#            `dispatching` + `crewing_captain` + `crewing_fo` after the
-#            scheduled instant.
+#            [leg_code, crew_code, process, entered_at, state]: (subject,
+#            process) identifies a journey 1:1 in this emit (verified — zero
+#            duplicate (actor, journey_type) pairs), and at the carrier's
+#            minute-grained clock a journey can pass through two states
+#            within one displayed minute (64 such pairs measured), so the
+#            state joins the key — zero duplicate key tuples verified. No
+#            engine journey id is needed or carried. Pushback delay IS this
+#            table: time in `dispatching` + `crewing_captain` + `crewing_fo`
+#            after the scheduled instant.
 #   DIM      dim_airport keys on airport_code (12 rows, unique — the
 #            carrier's own catalogue key); route_class and city moved onto
 #            the destination upstream in v2, so haul class is read HERE, not
@@ -174,15 +176,60 @@
 #   DOCS     every column carries an author `description:` so the companion
 #            README reads in the carrier's voice, not the simulator's.
 #
-# TIME: the sidecar carries a `runtime` anchor (2026-03-02T00:00:00 UTC) and
-# the tape is 90 days (sim 0 .. 2026-05-31); no `rebase:` block is needed.
+# TIME: the `rebase:` block declares the carrier's operations clock. The
+# emit's own anchor is 2026-03-02T00:00:00 UTC and the tape is 90 days; a US
+# carrier's warehouse reads local time, so the origin is repinned to local
+# midnight in America/Phoenix — a real US ops zone with no DST, so the daily
+# cadence (05:00 musters, duty days, banks) holds the same wall clock all
+# quarter instead of jumping an hour at the March DST switch. `grain: minute`
+# truncates every rendered timestamp (and the SCD-2 window bounds) to whole
+# minutes: real ops data is minute-grained at best, and the microsecond
+# surface was round-1 QA's fastest synthetic tell. Raw sim-time ordering and
+# the date keys are untouched — wall-clock digits are preserved by the repin,
+# so the calendar below still covers the quarter.
 # CALENDAR: dim_date spans the quarter's whole months, 2026-03-01 ..
 # 2026-05-31, so the flu wave and payday cadence read by week/day off the
 # calendar. Every instant carries a date key beside it, named for its stem.
+# SUPPLEMENTS: two author-maintained reference catalogues ship beside the
+# star — dim_delay_reason (IATA-style delay codes) and
+# dim_cancellation_reason (DOT-style cancellation categories), loaded from
+# CSVs beside this config and recorded in the manifest as author-supplied
+# (they trace to no emit value). No fact column carries a reason code this
+# quarter — the operational events record none upstream — so they stand as
+# the catalogue an ops warehouse would hold, awaiting coded events.
 
 mode: dimensional
 
 readme_overlay: README-overlay.md
+
+rebase:
+  base_date: 2026-03-02
+  timezone: America/Phoenix
+  grain: minute
+
+supplements:
+  - name: dim_delay_reason
+    description: "The carrier's delay-code catalogue (IATA-style numeric codes, grouped): the reference list dispatchers code delays against. Author-maintained reference data — no fact column carries a delay code this quarter."
+    columns:
+      delay_code: VARCHAR
+      delay_group: VARCHAR
+      description: VARCHAR
+    file: delay_reason.csv
+    descriptions:
+      delay_code: "Two-digit delay code, IATA numbering."
+      delay_group: "The code's group: passenger, ramp, technical, flight_ops_crew, weather, air_traffic, or reactionary."
+      description: "What the code means, as the ops manual words it."
+  - name: dim_cancellation_reason
+    description: "The carrier's cancellation-reason categories (DOT-style letter codes). Author-maintained reference data — no fact column carries a cancellation code this quarter."
+    columns:
+      cancellation_code: VARCHAR
+      label: VARCHAR
+      description: VARCHAR
+    file: cancellation_reason.csv
+    descriptions:
+      cancellation_code: "Single-letter cancellation category, DOT reporting convention."
+      label: "Short name of the category."
+      description: "What the category covers."
 
 date_dimension:
   from: "2026-03-01"
@@ -367,12 +414,12 @@ dimensional:
     #     intervals after the scheduled instant. ---
     - name: fact_lifecycle_state
       role: fact
-      description: "One row per state occupancy of a leg or crew-member lifecycle: the flight process (scheduled through completed/cancelled), and the crew's roster, sickness, and employment processes. Filter on `process` first; exactly one of leg_code / crew_code is set per row, and (leg_code or crew_code, process, entered_at) identifies the row."
+      description: "One row per state occupancy of a leg or crew-member lifecycle: the flight process (scheduled through completed/cancelled), and the crew's roster, sickness, and employment processes. Filter on `process` first; exactly one of leg_code / crew_code is set per row, and (leg_code or crew_code, process, entered_at, state) identifies the row — a leg can pass through two states within one displayed minute."
       source:
         grain: history_interval
         kind: journey_instance
         property: current_state
-      key: [leg_code, crew_code, process, entered_at]
+      key: [leg_code, crew_code, process, entered_at, state]
       columns:
         - name: leg_code
           fk: {to: dim_scheduled_leg, via: reference}
