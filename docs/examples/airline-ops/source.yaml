@@ -110,11 +110,22 @@
 # never changes in this emit; it is audited with the rest of nothing (left
 # out via `only`).
 #
-# Source requires a resolved wallclock anchor; none is declared here, so it
-# falls back to the sidecar `runtime` (2026-03-02T00:00:00 UTC) — the emit's
-# own clock. Uncomment `rebase:` to override.
+# CLOCK: the `rebase:` block declares the carrier's operations clock. The
+# emit's own anchor is 2026-03-02T00:00:00 UTC; a US carrier's ops system
+# stamps local time, so the origin is repinned to local midnight in
+# America/Phoenix — a real US ops zone with no DST, so the daily cadence
+# (05:00 musters, duty days, banks) holds the same wall clock all quarter
+# instead of jumping an hour at the March DST switch. `grain: minute`
+# truncates every rendered timestamp to whole minutes: real ops systems are
+# minute-grained at best, and the microsecond surface was round-1 QA's
+# fastest synthetic tell. Raw sim-time keys (and ordering) are untouched.
 
 mode: source
+
+rebase:
+  base_date: 2026-03-02
+  timezone: America/Phoenix
+  grain: minute
 
 keys:
   actor: presentation_id
@@ -433,7 +444,3 @@ source:
         sub_types: [duty_station]
         item_type: duty_station
         only: [capacity, allocated]
-
-# rebase:
-#   base_date: 2026-03-02
-#   timezone: UTC

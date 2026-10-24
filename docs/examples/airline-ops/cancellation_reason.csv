@@ -1,0 +1,5 @@
+cancellation_code,label,description
+A,carrier,"Circumstances within the carrier's control: crew shortage, technical fault, late aircraft rotation"
+B,weather,"Extreme or hazardous weather at departure, destination, or enroute"
+C,national_airspace,"National airspace system: airport operations, heavy traffic volume, air traffic control"
+D,security,"Security: evacuation, re-boarding after a breach, inoperative screening"

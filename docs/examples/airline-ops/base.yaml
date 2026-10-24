@@ -35,10 +35,15 @@
 # stays a column here by design; the curated exports are where the engine's
 # counters stop surfacing.
 #
-# TIMESTAMPS: no `rebase:` is declared, but lifecycle columns still land as
-# wallclock TIMESTAMPs — the sidecar carries a `runtime` anchor
-# (2026-03-02T00:00:00 UTC) and base renders through the effective anchor.
-# Domain `prop__` columns are presentation-verbatim at their declared types.
+# TIMESTAMPS: lifecycle columns land as wallclock TIMESTAMPs through the
+# `rebase:` block below — the carrier's operations clock. The emit's own
+# anchor is 2026-03-02T00:00:00 UTC; the origin is repinned to local midnight
+# in America/Phoenix (a real US ops zone with no DST, so the daily cadence
+# holds the same wall clock all quarter), and `grain: minute` truncates every
+# rendered timestamp to whole minutes — real ops systems are minute-grained
+# at best, and the microsecond surface was round-1 QA's fastest synthetic
+# tell. The same clock is declared in all four configs. Domain `prop__`
+# columns are presentation-verbatim at their declared types.
 #
 # SLICE_ONLY: every non-exempt `temporal_class: slice_only` column is
 # auto-omitted export-wide with a notice — here actor has none, resource
@@ -46,6 +51,11 @@
 # Their past is unknowable, so base will not present them.
 
 mode: base
+
+rebase:
+  base_date: 2026-03-02
+  timezone: America/Phoenix
+  grain: minute
 
 base:
   declare_keys: true
