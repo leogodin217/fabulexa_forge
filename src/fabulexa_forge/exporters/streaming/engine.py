@@ -10,11 +10,13 @@ properties), and every stream's rows merge under a
 canonical key whose source-identity component is the declared stream name.
 Also resolves the message-key election (`exporters.election`) and renders the
 elected key and after-image identity through it (design doc § Message-key
-election). A declared stream's numeric `render` map (`decimal` /
-`json_precision`) applies at the codec seam — the post-fold SELECT
+election). A declared stream's `render` map (`decimal` / `json_precision` /
+payload `instant`) applies at the codec seam — the post-fold SELECT
 `_wrap_stream_render_sql` composes ahead of the after-image assembly,
-through the same `fabulexa_forge._sql` rendering authorities the table modes
-compose (design doc § Streaming attach). Naming and vocabulary — after-image
+through the same `fabulexa_forge._sql` / `fabulexa_forge.anchor` rendering
+authorities the table modes compose, an `instant` entry pinned to the
+writers' temporal text form (design doc § Streaming attach). Naming and
+vocabulary — after-image
 output keys, member-kind values, the envelope `kind` — resolve through
 `presentation.py`, the single naming authority also read by the driver's
 Debezium value-schema builders (design doc § Output-name resolution, § Kind
@@ -35,10 +37,16 @@ import heapq
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Iterator, Literal, Sequence, cast
 
-from fabulexa_forge._sql import render_decimal_expr, render_json_precision_expr
-from fabulexa_forge.anchor import render_ts
+from fabulexa_forge._sql import (
+    INSTANT_DENOTED_TYPE,
+    pinned_temporal_text_sql,
+    render_decimal_expr,
+    render_json_precision_expr,
+)
+from fabulexa_forge.anchor import anchor_temporal_expr, render_ts
 from fabulexa_forge.config.models import (
     DecimalElection,
+    InstantElection,
     JsonPrecisionElection,
     KindStream,
     MembershipStream,
@@ -63,6 +71,7 @@ from fabulexa_forge.derivations.state_at import STATE_AT_COLUMNS, build_state_at
 from fabulexa_forge.errors import (
     DecimalSourceIsDouble,
     ExportError,
+    InstantSourceIsBigint,
     JsonPrecisionSourceIsVarchar,
     RenderKeyResolves,
     StreamChangeScopeUnresolvable,
@@ -71,6 +80,7 @@ from fabulexa_forge.errors import (
     StreamOutputNameCollision,
     StreamPropertyNotAddressable,
     StreamRenameUnresolvable,
+    TemporalRenderRequiresAnchor,
 )
 from fabulexa_forge.exporters.election import (
     _presentation_key_sql,
@@ -100,13 +110,18 @@ from fabulexa_forge.exporters.streaming.routing import (
 )
 from fabulexa_forge.exporters.streaming.selection import resolve_stream_selection
 from fabulexa_forge.exporters.streaming.types import StreamEvent
+from fabulexa_forge.reader.emit import pin_session_timezone
 from fabulexa_forge.reader.errors import TableNotFoundError
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
 
     from fabulexa_forge.anchor import EffectiveAnchor
-    from fabulexa_forge.config.models import KeySurface, StreamConfig
+    from fabulexa_forge.config.models import (
+        KeySurface,
+        StreamConfig,
+        StreamRenderElection,
+    )
     from fabulexa_forge.exporters.election import Election
     from fabulexa_forge.exporters.notices import NoticeSink
     from fabulexa_forge.reader.emit import Emit
@@ -222,17 +237,21 @@ def _check_stream_change_scope(
     )
 
 
-#: Per numeric-only streaming election kind: the required declared source
-#: type and the error class its gate raises — streaming's own addressing of
-#: the decimal / json_precision source-type gates (no instant election
-#: reaches streaming; design doc § Streaming attach).
-_STREAM_RENDER_SOURCE_GATES: dict[str, tuple[str, type[ExportError], str]] = {
-    "decimal": (
+#: Per streaming election kind: the required declared source type and the
+#: error class its gate raises — streaming's own addressing of the decimal /
+#: instant / json_precision source-type gates (design doc § Streaming attach).
+_STREAM_RENDER_SOURCE_GATES: dict[type, tuple[str, type[ExportError], str]] = {
+    DecimalElection: (
         "DOUBLE",
         DecimalSourceIsDouble,
         "decimal rendering requires a DOUBLE source",
     ),
-    "json_precision": (
+    InstantElection: (
+        "BIGINT",
+        InstantSourceIsBigint,
+        "instant rendering requires a BIGINT sim-time source",
+    ),
+    JsonPrecisionElection: (
         "VARCHAR",
         JsonPrecisionSourceIsVarchar,
         "json_precision requires a VARCHAR JSON payload source",
@@ -244,7 +263,7 @@ def _verify_stream_render_source_type(
     stream_name: str,
     key: str,
     column_name: str,
-    election: "DecimalElection | JsonPrecisionElection",
+    election: "StreamRenderElection",
     col_types: dict[str, str],
 ) -> None:
     """Enforce one stream render entry's source-type gate.
@@ -258,11 +277,11 @@ def _verify_stream_render_source_type(
         col_types: The addressed table's column name -> declared DuckDB type.
 
     Raises:
-        DecimalSourceIsDouble, JsonPrecisionSourceIsVarchar: `column_name`'s
-            declared type fails the election's source-type gate.
+        DecimalSourceIsDouble, InstantSourceIsBigint,
+            JsonPrecisionSourceIsVarchar: `column_name`'s declared type
+            fails the election's source-type gate.
     """
-    form = "decimal" if isinstance(election, DecimalElection) else "json_precision"
-    expected_type, error_cls, reason = _STREAM_RENDER_SOURCE_GATES[form]
+    expected_type, error_cls, reason = _STREAM_RENDER_SOURCE_GATES[type(election)]
     sql_type = col_types.get(column_name)
     if sql_type is None or sql_type.upper() != expected_type:
         got = sql_type if sql_type is not None else "no declared type"
@@ -305,8 +324,9 @@ def _validate_kind_stream_render(
 
     Raises:
         RenderKeyResolves: A render key is not a member of `stream.properties`.
-        DecimalSourceIsDouble, JsonPrecisionSourceIsVarchar: The election's
-            source-type gate fails.
+        DecimalSourceIsDouble, InstantSourceIsBigint,
+            JsonPrecisionSourceIsVarchar: The election's source-type gate
+            fails.
     """
     if not stream.render:
         return
@@ -334,8 +354,9 @@ def _validate_membership_stream_render(
         RenderKeyResolves: A render key is not a member of `stream.fields`,
             or names a reference field (outside the typed-election domain —
             reference identity is key election's surface).
-        DecimalSourceIsDouble, JsonPrecisionSourceIsVarchar: The election's
-            source-type gate fails.
+        DecimalSourceIsDouble, InstantSourceIsBigint,
+            JsonPrecisionSourceIsVarchar: The election's source-type gate
+            fails.
     """
     if not stream.render:
         return
@@ -351,6 +372,49 @@ def _validate_membership_stream_render(
         _verify_stream_render_source_type(
             stream.name, key, f"elem__{key}", election, col_types
         )
+
+
+def _check_stream_render_anchor(
+    emit: "Emit", config: "StreamConfig", anchor: "EffectiveAnchor | None"
+) -> None:
+    """Enforce TemporalRenderRequiresAnchor's streaming shape, and pin the
+    session zone when a payload `instant` election will compile.
+
+    An elected rendering never falls back to raw integers (the explicit-
+    election posture) — a stream render map carrying an `instant` entry
+    with no resolved anchor refuses at the eager pass, before any fold
+    materializes. When the anchor resolves, the session zone is pinned to
+    it (the reader's connection-scoped session setup), so the shared
+    temporal renderer's grain truncation reads the anchor's local wall
+    clock — the same pin every table-mode invocation performs. A config
+    with no `instant` entry neither requires an anchor nor touches the
+    session — byte-identical to today.
+
+    Args:
+        emit: The open emit (the session-zone pin's connection).
+        config: The validated streaming configuration.
+        anchor: The resolved effective anchor, or None.
+
+    Raises:
+        TemporalRenderRequiresAnchor: An `instant` render entry is declared
+            and `anchor` is None.
+    """
+    instant_entries = [
+        (stream.name, key)
+        for stream in config.streams
+        for key, election in (stream.render or {}).items()
+        if isinstance(election, InstantElection)
+    ]
+    if not instant_entries:
+        return
+    if anchor is None:
+        name, key = instant_entries[0]
+        raise TemporalRenderRequiresAnchor(
+            f"render key '{key}' on stream '{name}': temporal rendering"
+            " requires a resolved anchor; this emit declares no runtime"
+            " calendar and none was supplied"
+        )
+    pin_session_timezone(emit, anchor)
 
 
 def _validate_kind_stream(sidecar: "Sidecar", stream: "KindStream") -> None:
@@ -369,7 +433,8 @@ def _validate_kind_stream(sidecar: "Sidecar", stream: "KindStream") -> None:
             prop__ column of the stream's kind.
         RenderKeyResolves: A `render` key is not a member of
             `stream.properties`.
-        DecimalSourceIsDouble, JsonPrecisionSourceIsVarchar: A `render`
+        DecimalSourceIsDouble, InstantSourceIsBigint,
+            JsonPrecisionSourceIsVarchar: A `render`
             entry's source-type gate fails.
         TemporalClassUnavailableError: Propagated from the slice_only check.
     """
@@ -436,7 +501,8 @@ def _validate_membership_stream(sidecar: "Sidecar", stream: "MembershipStream") 
             stream name.
         RenderKeyResolves: A `render` key is not a member of `stream.fields`,
             or names a reference field.
-        DecimalSourceIsDouble, JsonPrecisionSourceIsVarchar: A `render`
+        DecimalSourceIsDouble, InstantSourceIsBigint,
+            JsonPrecisionSourceIsVarchar: A `render`
             entry's source-type gate fails.
     """
     kind = stream.membership.kind
@@ -1207,7 +1273,10 @@ class StreamResolution:
 
 
 def resolve_streams(
-    emit: "Emit", config: "StreamConfig", notice_sink: "NoticeSink"
+    emit: "Emit",
+    config: "StreamConfig",
+    anchor: "EffectiveAnchor | None",
+    notice_sink: "NoticeSink",
 ) -> StreamResolution:
     """Run the eager business-rule validation pass over every declared stream.
 
@@ -1231,6 +1300,10 @@ def resolve_streams(
     Args:
         emit: The open emit (reader + connection).
         config: The validated streaming configuration.
+        anchor: The resolved effective anchor, or None — the `instant`
+            render gate's input (`_check_stream_render_anchor`), and the
+            session-zone pin's when one such entry is declared. The same
+            anchor the resolved streams are later iterated under.
         notice_sink: The caller-supplied sink the out-of-domain `where`-value
             notices flow through.
 
@@ -1270,9 +1343,12 @@ def resolve_streams(
         StreamKindLabelUnknown: A `kind_labels` key names no sidecar kind.
         StreamKindLabelCollision: A label or a per-stream `kind_label`
             equals a different kind's rendered name.
+        TemporalRenderRequiresAnchor: An `instant` render entry is declared
+            and no anchor resolved.
     """
     fork_path = require_single_branch(emit.sidecar)
     sidecar = emit.sidecar
+    _check_stream_render_anchor(emit, config, anchor)
     selection_by_stream: dict[str, "frozenset[str] | None"] = {}
     for stream in config.streams:
         if isinstance(stream, KindStream):
@@ -1479,17 +1555,20 @@ def _rows_to_keyed(
 def _wrap_stream_render_sql(
     fold_sql: str,
     col_names: "Sequence[str]",
-    render: "Mapping[str, DecimalElection | JsonPrecisionElection] | None",
+    render: "Mapping[str, StreamRenderElection] | None",
     prefix: str,
     stream_name: str,
+    anchor: "EffectiveAnchor | None",
 ) -> str:
-    """Wrap a fold's SQL with the stream's numeric render elections, applied
-    at the codec seam (design doc § Streaming attach): the post-fold SELECT
+    """Wrap a fold's SQL with the stream's render elections, applied at the
+    codec seam (design doc § Streaming attach): the post-fold SELECT
     that assembles after-images, upstream of `_build_after_image` /
     `_build_membership_after_image`. An elected column's codec-VARCHAR value
-    renders through the shared decimal/json_precision authorities in place;
-    every other column passes through verbatim. `render` empty/None ->
-    `fold_sql` unchanged (byte-identical to today).
+    renders through the shared decimal/instant/json_precision authorities in
+    place — an `instant` entry through the shared temporal renderer, pinned
+    to the writers' temporal text form (the same text the event log's
+    `changes` entries carry); every other column passes through verbatim.
+    `render` empty/None -> `fold_sql` unchanged (byte-identical to today).
 
     Args:
         fold_sql: The fold's own SELECT (row-state-events or
@@ -1501,6 +1580,9 @@ def _wrap_stream_render_sql(
         prefix: The after-image column prefix a render key addresses
             (`prop__` for a kind stream, `elem__` for a membership stream).
         stream_name: The declaring stream's name, for guard attribution.
+        anchor: The resolved effective anchor — never None when `render`
+            carries an `instant` entry (`_check_stream_render_anchor`'s
+            guarantee).
 
     Returns:
         The wrapping SELECT, or `fold_sql` unchanged when `render` is empty.
@@ -1522,6 +1604,15 @@ def _wrap_stream_render_sql(
                 double_expr, precision, scale, name, stream_name
             )
             select_parts.append(f'CAST({decimal_expr} AS VARCHAR) AS "{name}"')
+        elif isinstance(election, InstantElection):
+            assert anchor is not None, "validated: instant election has an anchor"
+            bigint_expr = f"CAST({qualified} AS BIGINT)"
+            native_expr = anchor_temporal_expr(anchor, bigint_expr, election.instant)
+            zone = str(anchor.timezone) if election.instant == "timestamptz" else None
+            text_expr = pinned_temporal_text_sql(
+                native_expr, INSTANT_DENOTED_TYPE[election.instant], zone
+            )
+            select_parts.append(f'{text_expr} AS "{name}"')
         else:
             json_expr = render_json_precision_expr(
                 qualified, election.json_precision, name, stream_name
@@ -1655,7 +1746,7 @@ def _iter_kind_streams_inner(
             sidecar, fork_path, kind, properties, change_scope=change_scope
         )
         sql = _wrap_stream_render_sql(
-            sql, col_names, stream.render, "prop__", stream.name
+            sql, col_names, stream.render, "prop__", stream.name, anchor
         )
         rows = emit.query(sql, ())
 
@@ -1803,7 +1894,7 @@ def _iter_membership_streams_inner(
             sidecar, fork_path, owner_kind, property_name, stream.fields
         )
         sql = _wrap_stream_render_sql(
-            sql, col_names, stream.render, "elem__", stream.name
+            sql, col_names, stream.render, "elem__", stream.name, anchor
         )
         rows = emit.query(sql, ())
         rows = _filter_rows_by_selection(rows, selection_by_stream[stream.name])
@@ -1960,7 +2051,7 @@ def iter_stream_events(
             StreamWhereColumnUnresolved, StreamWhereValueUncastable: A
             stream's `where` resolution fails.
     """
-    resolution = resolve_streams(emit, config, notice_sink)
+    resolution = resolve_streams(emit, config, anchor, notice_sink)
     return iter_resolved_stream_events(emit, config, anchor, resolution, None, None)
 
 

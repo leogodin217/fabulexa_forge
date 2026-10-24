@@ -12,8 +12,10 @@ exercises end to end)."""
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import duckdb
 import pytest
@@ -21,8 +23,10 @@ from _support.notices import discard_notice_sink
 from _support.sidecar_builder import identity_column, prop_column
 from _support.sidecar_builder import write_emit as _write_sidecar
 
+from fabulexa_forge.anchor import EffectiveAnchor
 from fabulexa_forge.config.models import (
     DecimalElection,
+    InstantElection,
     JsonPrecisionElection,
     KindStream,
     MembershipStream,
@@ -30,8 +34,10 @@ from fabulexa_forge.config.models import (
 )
 from fabulexa_forge.errors import (
     DecimalSourceIsDouble,
+    InstantSourceIsBigint,
     JsonPrecisionSourceIsVarchar,
     RenderKeyResolves,
+    TemporalRenderRequiresAnchor,
 )
 from fabulexa_forge.exporters.streaming.debezium import build_debezium_value_schema
 from fabulexa_forge.exporters.streaming.engine import iter_stream_events
@@ -41,6 +47,17 @@ from fabulexa_forge.reader.emit import open_emit
 from ._helpers import _ddl, _membership_table_spec
 
 _MS = 1_000_000  # one sim-time "tick", in nanoseconds
+_HOUR_NS = 3_600_000_000_000  # one hour of sim time, in nanoseconds
+
+
+def _utc_anchor() -> "EffectiveAnchor":
+    """A resolved UTC anchor: sim_time 0 = 2024-01-15 12:00:00 UTC, default
+    (µs) grain — one hour of sim offset renders as 13:00:00."""
+    return EffectiveAnchor(
+        start_instant=datetime(2024, 1, 15, 12, 0, 0, tzinfo=timezone.utc),
+        timezone=ZoneInfo("UTC"),
+    )
+
 
 # ---------------------------------------------------------------------------
 # Kind-shaped fixture: one `widget` kind, a tracked DOUBLE and a constant
@@ -60,6 +77,13 @@ _KIND_RENDER_COLS: list[dict[str, object]] = [
     ),
     prop_column(
         "prop__context", "VARCHAR", history_tracked=False, temporal_class="constant"
+    ),
+    prop_column(
+        "prop__stamped_at",
+        "BIGINT",
+        history_tracked=False,
+        temporal_class="constant",
+        unit="ns since scenario start",
     ),
 ]
 
@@ -82,9 +106,20 @@ def _build_kind_render_emit(tmp_path: Path) -> Path:
     conn = duckdb.connect(str(db_path))
     conn.execute(_ddl("records__widget", _KIND_RENDER_COLS))
     conn.executemany(
-        'INSERT INTO "records__widget" VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        'INSERT INTO "records__widget" VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
         [
-            ("trunk", "w1", 0, True, None, 5 * _MS, 0, 8.2564, '{"pct": 0.1234}'),
+            (
+                "trunk",
+                "w1",
+                0,
+                True,
+                None,
+                5 * _MS,
+                0,
+                8.2564,
+                '{"pct": 0.1234}',
+                _HOUR_NS,
+            ),
             (
                 "trunk",
                 "w2",
@@ -95,6 +130,7 @@ def _build_kind_render_emit(tmp_path: Path) -> Path:
                 1,
                 3.5001,
                 '{"pct": 0.6789}',
+                None,
             ),
         ],
     )
@@ -156,6 +192,7 @@ _MEMBERSHIP_RENDER_COLS: list[dict[str, object]] = [
     {"name": "left_sim_time", "type": "BIGINT"},
     {"name": "elem__amount", "type": "DOUBLE"},
     {"name": "elem__payload", "type": "VARCHAR"},
+    {"name": "elem__stamped", "type": "BIGINT"},
     {"name": "member__owner__kind", "type": "VARCHAR"},
     {"name": "member__owner__id", "type": "VARCHAR"},
 ]
@@ -179,7 +216,7 @@ def _build_membership_render_emit(tmp_path: Path) -> Path:
     conn = duckdb.connect(str(db_path))
     conn.execute(_ddl(table_name, _MEMBERSHIP_RENDER_COLS))
     conn.execute(
-        f'INSERT INTO "{table_name}" VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+        f'INSERT INTO "{table_name}" VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
         [
             "trunk",
             "m1",
@@ -187,6 +224,7 @@ def _build_membership_render_emit(tmp_path: Path) -> Path:
             300,
             8.2564,
             '{"pct": 0.4321}',
+            2 * _HOUR_NS,
             "owner_kind",
             "o1",
         ],
@@ -324,6 +362,43 @@ class TestKindStreamRenderValidation:
         with open_emit(emit_dir) as emit, pytest.raises(JsonPrecisionSourceIsVarchar):
             iter_stream_events(emit, config, None, notice_sink=discard_notice_sink)
 
+    def test_instant_on_non_bigint_property_raises(self, tmp_path: Path) -> None:
+        """`instant` elected on a VARCHAR property raises
+        InstantSourceIsBigint — the sim-instant assertion is checkable only
+        against an integer sim-offset column, so a non-sim-instant property
+        refuses the election."""
+        emit_dir = _build_kind_render_emit(tmp_path)
+        config = _state_changes_config(
+            [
+                _kind_stream_render(
+                    "widgets",
+                    ["context"],
+                    render={"context": InstantElection(instant="timestamp")},
+                )
+            ]
+        )
+        with open_emit(emit_dir) as emit, pytest.raises(InstantSourceIsBigint):
+            iter_stream_events(
+                emit, config, _utc_anchor(), notice_sink=discard_notice_sink
+            )
+
+    def test_instant_without_anchor_raises(self, tmp_path: Path) -> None:
+        """An `instant` render entry with no resolved anchor raises
+        TemporalRenderRequiresAnchor at the eager pass — an elected rendering
+        never falls back to raw integers."""
+        emit_dir = _build_kind_render_emit(tmp_path)
+        config = _state_changes_config(
+            [
+                _kind_stream_render(
+                    "widgets",
+                    ["stamped_at"],
+                    render={"stamped_at": InstantElection(instant="timestamp")},
+                )
+            ]
+        )
+        with open_emit(emit_dir) as emit, pytest.raises(TemporalRenderRequiresAnchor):
+            iter_stream_events(emit, config, None, notice_sink=discard_notice_sink)
+
 
 # ---------------------------------------------------------------------------
 # MembershipStream render validation — RenderKeyResolves / source-type gates
@@ -396,6 +471,23 @@ class TestMembershipStreamRenderValidation:
             pytest.raises(RenderKeyResolves, match="reference field"),
         ):
             iter_stream_events(emit, config, None, notice_sink=discard_notice_sink)
+
+    def test_instant_on_non_bigint_field_raises(self, tmp_path: Path) -> None:
+        """`instant` elected on a DOUBLE field raises InstantSourceIsBigint."""
+        emit_dir = _build_membership_render_emit(tmp_path)
+        config = _membership_events_config(
+            [
+                _membership_stream_render(
+                    "waiters",
+                    ["amount"],
+                    render={"amount": InstantElection(instant="timestamp")},
+                )
+            ]
+        )
+        with open_emit(emit_dir) as emit, pytest.raises(InstantSourceIsBigint):
+            iter_stream_events(
+                emit, config, _utc_anchor(), notice_sink=discard_notice_sink
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -556,3 +648,106 @@ class TestMembershipStreamRenderEvents:
         assert after is not None
         assert after["amount"] == "8.2564"
         assert after["payload"] == '{"pct": 0.4321}'
+
+
+# ---------------------------------------------------------------------------
+# Payload `instant` election — elected wallclock text at the codec seam
+# ---------------------------------------------------------------------------
+
+
+class TestKindStreamInstantRenderEvents:
+    def _run(
+        self, tmp_path: Path, label: str, render: dict[str, object] | None
+    ) -> list[StreamEvent]:
+        emit_dir = _build_kind_render_emit(_scoped_dir(tmp_path, label))
+        config = _state_changes_config(
+            [_kind_stream_render("widgets", ["volume", "stamped_at"], render=render)]
+        )
+        with open_emit(emit_dir) as emit:
+            return list(
+                iter_stream_events(
+                    emit, config, _utc_anchor(), notice_sink=discard_notice_sink
+                )
+            )
+
+    def _elect(self, tmp_path: Path) -> list[StreamEvent]:
+        return self._run(
+            tmp_path,
+            "elect",
+            {"stamped_at": InstantElection(instant="timestamp")},
+        )
+
+    def test_after_images_carry_pinned_wallclock_text(self, tmp_path: Path) -> None:
+        """An elected sim-instant property's 'c' and 'u' after-image entries
+        carry the pinned naive-TIMESTAMP text of the anchor-rendered instant
+        — the same text the table modes and the event log's `changes`
+        entries carry — in place of the raw ns offset."""
+        events = self._elect(tmp_path)
+        by_op = _events_by_op(events, "w1")
+        for op in ("c", "u"):
+            after = by_op[op].after
+            assert after is not None
+            assert after["stamped_at"] == "2024-01-15 13:00:00"
+
+    def test_null_sim_instant_stays_null(self, tmp_path: Path) -> None:
+        """A NULL sim-instant renders NULL under the election — nothing is
+        fabricated for a leg still awaiting its stamp."""
+        events = self._elect(tmp_path)
+        c = _events_by_op(events, "w2")["c"]
+        assert c.after is not None
+        assert c.after["stamped_at"] is None
+
+    def test_date_rendering_projects_the_wall_clock(self, tmp_path: Path) -> None:
+        """A `date` instant rendering carries the pinned DATE text of the
+        same local wall clock."""
+        events = self._run(
+            tmp_path, "date", {"stamped_at": InstantElection(instant="date")}
+        )
+        c = _events_by_op(events, "w1")["c"]
+        assert c.after is not None
+        assert c.after["stamped_at"] == "2024-01-15"
+
+    def test_non_after_fields_unchanged_with_election_on(self, tmp_path: Path) -> None:
+        """Message key, merge order, seq, and ts are unchanged whether or not
+        the instant election applies — only after-image text differs."""
+        elected = self._elect(tmp_path)
+        silent = self._run(tmp_path, "silent", None)
+        assert [_non_after_fields(e) for e in elected] == [
+            _non_after_fields(e) for e in silent
+        ]
+
+    def test_silent_stream_carries_raw_ns_text(self, tmp_path: Path) -> None:
+        """With no election the sim-instant rides the wire as the raw ns
+        offset — byte-identical to today's default rendering."""
+        events = self._run(tmp_path, "silent", None)
+        c = _events_by_op(events, "w1")["c"]
+        assert c.after is not None
+        assert c.after["stamped_at"] == str(_HOUR_NS)
+
+
+class TestMembershipStreamInstantRenderEvents:
+    def test_join_and_leave_carry_pinned_wallclock_text(self, tmp_path: Path) -> None:
+        """An elected BIGINT element field renders the pinned wallclock text
+        on both interval boundaries."""
+        emit_dir = _build_membership_render_emit(_scoped_dir(tmp_path, "elect"))
+        config = _membership_events_config(
+            [
+                _membership_stream_render(
+                    "waiters",
+                    ["amount", "stamped"],
+                    render={"stamped": InstantElection(instant="timestamp")},
+                )
+            ]
+        )
+        with open_emit(emit_dir) as emit:
+            events = list(
+                iter_stream_events(
+                    emit, config, _utc_anchor(), notice_sink=discard_notice_sink
+                )
+            )
+        by_op = _events_by_op(events, "m1")
+        for op in ("join", "leave"):
+            after = by_op[op].after
+            assert after is not None
+            assert after["stamped"] == "2024-01-15 14:00:00"
+            assert after["amount"] == "8.2564"
