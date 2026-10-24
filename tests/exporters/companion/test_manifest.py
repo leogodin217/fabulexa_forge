@@ -567,7 +567,10 @@ def test_event_log_table_and_columns_carry_pinned_descriptions(
         " keeps one identifier across its rows."
     )
     assert columns["event"]["description"] == (
-        "What happened to the item: 'create', 'update', or 'destroy'."
+        "What happened to the item: 'create', 'update', or 'destroy'. A"
+        " record's deactivation is an 'update' writing the soft-delete pair"
+        " (active, deactivated_at); 'destroy' marks a membership leaving its"
+        " collection."
     )
     assert columns["occurred_at"]["description"] == (
         "When the change took effect. Changes are logged in order, so this"
@@ -576,7 +579,7 @@ def test_event_log_table_and_columns_carry_pinned_descriptions(
     assert columns["changes"]["description"] == (
         "JSON object of the fields this change touched, each mapped to an"
         " [old, new] value pair — old is null on a creation, new is null on"
-        " a deletion."
+        " a membership leave."
     )
     for name in ("id", "item_id", "event", "occurred_at", "changes"):
         assert columns[name]["unit"] is None

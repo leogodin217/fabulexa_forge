@@ -329,7 +329,7 @@ set for gates and type resolution, whatever rows the predicate then selects.
 | Predicate column absent from `columns` | Legal — selection and projection are orthogonal; the predicate reads the subject relation, not the projected output |
 | Predicate on a reference-valued constant property | Legal, no special case: the comparison is over base-layer values (record ids), literal-typed from the sidecar, whatever surface the column *renders* |
 | Two declarations' selections overlap, or exhaust nothing | Legal — declared tables require neither disjointness nor coverage (two may already share a population); rows matching no declaration are not exported |
-| Events records source with `where` | The fold input narrows to the satisfying records through per-row records-spine resolution; every event of an excluded record is excluded, `create` and `destroy` included |
+| Events records source with `where` | The fold input narrows to the satisfying records through per-row records-spine resolution; every event of an excluded record is excluded, `create` and the deactivation update included |
 | Events membership source with `sub_types` / `where` | The fold input narrows to the intervals of satisfying owners via the parent lookup; every `join` / `leave` of an excluded owner's collection is excluded |
 | `where` beside `only` / `ignore` on one events source | Orthogonal: `where` selects *records* (or owners), `only` / `ignore` select the audited *property set*. A property may be predicated and ignored at once |
 
@@ -347,8 +347,8 @@ idiom. Fixed columns; the author names the table, not the columns:
 |---|---|
 | `id` | `BIGINT`, the audit table's key. The event's 1-based position in the log's total order (below) over the **whole tape** — every row the log emits, across every source, one counter. A row-number, never a value-based rank: two rows tying the order key take consecutive numbers. Assigned above changeset resolution (a suppressed update consumes no number, so `id` is dense) and beneath the window predicate (so an event's number does not depend on which window or invocation exported it). The log's emitted row order is `ORDER BY id` |
 | `item_type` | The population's **resolved** item-type: an events source's declared `item_type` override, else its kind's `source.kind_labels` label (the owner kind's label for a membership source, forming `<label>.<property>`), else the kind name verbatim (`<K>.<property>` for membership) — sidecar-derived by default, independent of which thing-tables are declared, unless an author declares it otherwise (§ Domain vocabulary). The contract identity everywhere item-type governs: this stamped column, the `item_id` dereference key, the union-safety gate's granularity, and the order-key component |
-| `item_id` | For a records source: the record's identity in its own population's elected surface (`record_id` verbatim absent an election); on destroy rows the value comes from the identity join relation, not the fold's nulled after-image, so it is never NULL. For a membership source: the **owner** record's identity in the owner kind's election — the junction-owner-column render, per-row resolved for a sub-typed owner. Column type per the junction-member-column rule over the union of every source's resolved surfaces: the common declared type when all agree, else `VARCHAR` with `record_index` digit-rendered |
-| `event` | `create` / `update` / `destroy` — deterministic recode of the folds' ops (`c`/`u`/`d`; `join` → `create`, `leave` → `destroy` of a membership in the named collection, recorded against the owner — `item_type` is what separates collection changes from the owner's own lifecycle rows) |
+| `item_id` | For a records source: the record's identity in its own population's elected surface (`record_id` verbatim absent an election); on a `d` (deactivation) row the value comes from the identity join relation, not the fold's nulled after-image, so it is never NULL. For a membership source: the **owner** record's identity in the owner kind's election — the junction-owner-column render, per-row resolved for a sub-typed owner. Column type per the junction-member-column rule over the union of every source's resolved surfaces: the common declared type when all agree, else `VARCHAR` with `record_index` digit-rendered |
+| `event` | `create` / `update` / `destroy` — deterministic recode of the folds' ops: `c` → `create`; `u` → `update`; a records source's `d` (the record's deactivation) → `update` carrying the deactivation changeset (below) — the state render's lifecycle is soft-delete, so the log records the UPDATE the application actually wrote, never a hard delete the state tables refute. `destroy` is reserved for an item the source shape actually drops: membership `join` → `create`, `leave` → `destroy` of a membership in the named collection (the association itself ends; its closed interval is the *record of* that ended association), recorded against the owner — `item_type` is what separates collection changes from the owner's own lifecycle rows |
 | `occurred_at` | Wallclock `TIMESTAMP` through the anchor renderer, or the events block's `render:` election — the log's one legal `render` key is its own instant column `event_sim_time`, a constant of the log's published contract rather than a reader question |
 | `changes` | Serialized JSON text (codec `VARCHAR`): an object mapping each audited property's **output key** — its bare name, or its source's declared `rename` target (§ Domain vocabulary) — to `[old, new]` pairs — a membership reference field expands in place to its `<f>_kind` / `<f>_id` entry pair (the junction render's names, kind then id, each renamed in place by a `rename` targeting the bare field name; `only` / `ignore` still address the bare field name). Keys in sidecar column-declaration order of the *source* properties — rename relabels, never reorders; values are the folds' `CAST(… AS VARCHAR)` after-image strings verbatim or `null` — the row-state-events / membership-events rendering, the same strings streaming's payloads carry, never the conformance codec — reference-valued entries in the target's elected surface (below), render-elected properties in their elected text form (below), and `<f>_kind` entry values rendered through `source.kind_labels` (§ Domain vocabulary). The JSON assembly (object construction, string escaping) is mode-owned SQL, rendered deterministically in the SELECT |
 
@@ -372,13 +372,13 @@ its history rows; an untracked `constant`-class property renders the current
 spine value in every after-image (the folds' type-1 path) — temporally honest
 precisely because `constant` means current equals genesis. Selecting by
 `history_tracked` instead of by class would silently drop untracked constants
-from `create` / `destroy` changesets. For a membership source, the
+from `create` (and membership `destroy`) changesets. For a membership source, the
 element-schema fields. The discriminator is in the set: a `constant`-class
 `prop__<K>_type` as any constant property, and the exempt sub-typed
 discriminator despite a `slice_only` class (the export-wide carve-out —
 exemption from the policy, not omission from the set); addressable by its bare
 name `<K>_type` under `only` / `ignore`, and — creation-constant — it appears in
-`create` / `destroy` changesets and never spawns an `update`. Each
+`create` changesets and never spawns an `update`. Each
 policy-omitted `slice_only` property emits one `slice-only-column-omitted`
 notice per events source.
 
@@ -387,14 +387,40 @@ notice per events source.
 | `create` | Every audited property: `[null, value]` from the `c` after-image |
 | `update` | Exactly the audited properties whose after-image value differs from the record's previous event's after-image: `[old, new]`. Coincident changes coalesce into one event (the fold's per-`(record, sim_time)` grain) |
 | `update` where no *audited* property changed | The event row is suppressed — an audit log records what it tracks, nothing else |
-| `destroy` | Every audited property: `[last value, null]` (old values from the preceding after-image) |
-| `create` / `destroy` with an empty audited set | Emitted with `changes = {}` — the lifecycle event is itself information |
+| records `d` (deactivation) | Exactly the deactivation changeset: `"active": ["true", "false"]`, `"deactivated_at": [null, <instant>]` — the fields deactivation writes, nothing else; payload properties are untouched by a soft delete and carry no entry |
+| `create` with an empty audited set | Emitted with `changes = {}` — the lifecycle event is itself information; the deactivation changeset is the event's own content, not an audited-set projection, so it is never empty |
 | membership `create` (join) | Every selected field: `[null, value]` |
 | membership `destroy` (leave) | Every selected field: `[value, null]` — the leave carries what left |
 
 Old values derive from the previous after-image per record (a lag over the
 fold's own output, audited subset) — a deterministic reshape of fold values,
 nothing recomputed from base state.
+
+**The deactivation changeset.** A record's end-of-life renders as an
+`update` whose changeset is exactly the state render's soft-delete pair,
+under its default output names — fixed, mode-definitional keys
+(`DEACTIVATION_CHANGES_KEYS`, [`exporters/source/events.py`](../../src/fabulexa_forge/exporters/source/events.py)):
+`"active": ["true", "false"]` (the CAST-AS-VARCHAR boolean text) and
+`"deactivated_at": [null, <text>]`, the text the log's own `render` election
+applied to the event's instant in the pinned in-JSON form — the same instant
+`occurred_at` carries, as the state table's `deactivated_at` column would
+render it. Both pairs are deterministic recodings of the one base fact the
+`d` event already stands on (`deactivated_at` non-NULL at that instant; the
+contract's C7 biconditional ties `active` to it, and `deactivated_at` is
+NULL while active by contract) — the same fidelity class as the op → event
+recode, never an invention. The pair is outside the audited property set and
+outside `only` / `ignore` / `rename` reach: it is the event's own content —
+what deactivation writes — not an audited-set projection, so narrowing never
+suppresses it and the update-suppression rule never fires on it. A records
+source's final `changes`-key surface includes both keys, so an audited
+property's output key landing on `active` or `deactivated_at` is refused at
+plan time (`SourceNameCollision` — resolve by renaming the property); a
+membership source emits no deactivation changeset and its field names are
+unconstrained. A records source therefore never emits `destroy`: the state
+render keeps every deactivated row, so there is no population the mode
+drops on a records source's account. A future hard-delete state shape would
+be the author election that reintroduces it; none exists, so no knob is
+invented (CLAUDE.md Principle #8).
 
 **Elected rendering inside `changes`.** An audited reference-valued property
 renders its old/new values in the target population's elected surface — the
@@ -469,9 +495,9 @@ configured event set; the [stream](streaming.md)'s `seq` and the
 [playback seam](playback.md)'s `seq` order by the seam's canonical order over
 their own selections. The log and the stream differ only in the relative
 priority of `event_class` and the source identity — both are deterministic,
-both resolve the update-before-destroy tie identically (within one record the
-source identity is constant), and they interleave distinct item types at one
-instant differently. The log reports its own emitted row order rather than
+both resolve the update-before-deactivation tie identically (within one record
+the source identity is constant), and they interleave distinct item types at
+one instant differently. The log reports its own emitted row order rather than
 adopting the seam's: a table whose key is not monotone in its own rows is not
 what an audit table is. Hence `id`, the audit-table key, not `seq`, the seam's
 word for a per-selection canonical position.
@@ -869,7 +895,7 @@ untouched.
 | Each `records__<kind>` table, sub-typed (`Sidecar.subtype_values(kind)` non-empty) | One state table per declared sub-type — `name: <kind>_<sub_type>`, `sub_types: [<sub_type>]` — `init`'s default split, matching dimensional's per-sub-type stubs. The first sub-type's stub carries a header comment naming the full domain; the last carries a commented combine-alternative (one shared table across every sub-type, `sub_types:` omitted) for a kind whose sub-types share an identical column set |
 | Each `membership__<K>__<p>` table, `K` flat | One junction table: `name: <K>_<p>` |
 | Each `membership__<K>__<p>` table, `K` sub-typed | One junction stub per declared sub-type — `name: <K>_<sub_type>_<p>`, `sub_types: [<sub_type>]` — aligned with the owner's per-sub-type state stubs; the last stub carries a commented combine-alternative (one whole junction, `sub_types:` omitted), mirroring the state stubs' posture |
-| ≥ 1 kind with a class-`tracked` property | One `events` stub named `versions`, one active source entry per such kind; membership sources and lifecycle-only kinds (no tracked property — spine `create` / `destroy` only) appended as commented-out source entries |
+| ≥ 1 kind with a class-`tracked` property | One `events` stub named `versions`, one active source entry per such kind; membership sources and lifecycle-only kinds (no tracked property — spine `create` / deactivation only) appended as commented-out source entries |
 | Membership event-source entries (commented-out), owner sub-typed | One commented entry per declared sub-type (`sub_types: [<sub_type>]`). Uncommenting the full set is plan-clean: the entries share the default item-type `<K>.<p>` under the item-type sharing exception, and their both-declared disjoint `sub_types` sets satisfy the overlap gate |
 | No kind carries a tracked property | The `events` stub is emitted fully commented out (name and every per-kind source), under a comment noting the emit's auditable history is lifecycle-only; uncommenting opts in |
 | The registry declares a population | The `keys` proposal per the key-election `init` contract ([`key-election.md`](key-election.md) § `init` proposals), aligned with the declared tables |
@@ -1004,7 +1030,7 @@ for a `tables` entry, `events source #<n>` (1-based, declaration order) for an
 | `DateParseSourceColumn` | A declared `{date_parse: …}` source is a declared VARCHAR payload column, read from the sidecar type directly, and not `slice_only` ([`temporal-elections.md`](temporal-elections.md)) | `"date_parse column '{column}' on '{table}': source must be an existing VARCHAR column (got {type})"` |
 | `DecimalSourceIsDouble` / `InstantSourceIsBigint` / `JsonPrecisionSourceIsVarchar` | Each typed value election's source column carries its admitted declared type — DOUBLE / BIGINT / VARCHAR respectively ([`value-rendering-elections.md`](value-rendering-elections.md) § Validation Rules) | Per rule, e.g. `"render key '{column}' on '{table}': decimal rendering requires a DOUBLE source (got {type})"` |
 | `ElectionKindConflict` | Across the declared tables of one kind that emit a property the event log renders, every table declares the identical render election — a silent emitting table counts as differing ([`value-rendering-elections.md`](value-rendering-elections.md) § Event-log and after-image reach) | `"property '{column}' of kind '{kind}': '{a}' and '{b}' declare conflicting render elections"` (silent-table variant names the electing and silent tables) |
-| `SourceNameCollision` | Output table names (the event log's included) and per-table column names unique after defaults + renames; within one events source, resolved `changes` keys are distinct after renames (a membership pair's expanded `_kind` / `_id` names included) | `"output name collision: {names}; resolve via rename"`; the `changes`-key case: `"{owner}: changes key collision: {keys}; resolve via rename"` |
+| `SourceNameCollision` | Output table names (the event log's included) and per-table column names unique after defaults + renames; within one events source, resolved `changes` keys are distinct after renames (a membership pair's expanded `_kind` / `_id` names included; a records source's surface includes the fixed deactivation changeset keys `active` / `deactivated_at` — § The event log) | `"output name collision: {names}; resolve via rename"`; the `changes`-key case: `"{owner}: changes key collision: {keys}; resolve via rename"` |
 | Reserved-name check (`exporters/reserved_names.py`, raised as `ExportError`) | No output table name collides with bookkeeping names / suffixes; no output column named `last_mutation_sim_time` (§ Presentation-name posture) — checked at plan build over all output names, so a full export and a later `--next` on the same target agree | — |
 | `ElectionMixedIdentity` / `ElectionUnionUnsafe` | Identity gates per declared table; edge gates per referencing column, per event-log **resolved** item-type (over the union of its sources' addressed populations; the owner kind's for a membership item-type), and per audited reference property; no gate across item-types (polymorphic identity) | Per [`key-election.md`](key-election.md) |
 | `SourceHistoryTrackedRequired` | The sidecar carries `history_tracked` flags (the events render consumes them) | `"source export requires per-column history_tracked flags; this emit predates them"` |
@@ -1082,10 +1108,10 @@ writer semantics, CSV posture, and incremental gating are owned by
   consumer loads the export and re-`SELECT`s it. None of the rendered values
   recovers it: `occurred_at` is a wallclock `TIMESTAMP` whose microsecond
   precision collides distinct nanosecond events, and `event` is a word, not an
-  ordinal — sorting by `(occurred_at, event)` puts `destroy` before `update`
-  alphabetically, the exact inverse of the computed order. The before-images do
-  not supply it either: recovering the order from them means deducing, per tied
-  pair, that a destroy's old value equals the preceding update's new value, and
+  ordinal — a coincident payload update and deactivation are two `update`
+  rows `(occurred_at, event)` cannot separate at all. The before-images do
+  not supply it either: a record's coincident payload update and deactivation
+  are two `update` rows at one instant whose changesets share no key, and
   membership events carry no chained before-image to deduce from at all. A
   consumer replaying the log to reconstruct state would get wrong answers with
   nothing in the data to signal it. `id` is the ActiveRecord audit-log idiom:
@@ -1117,7 +1143,8 @@ writer semantics, CSV posture, and incremental gating are owned by
 - **The audited set keys on the class, not the `history_tracked` bit.**
   `constant` means current equals genesis, so an untracked constant's current
   value is temporally honest in every after-image; selecting by the bit would
-  silently drop untracked constants from `create` / `destroy` changesets.
+  silently drop untracked constants from `create` (and membership `destroy`)
+  changesets.
 - **The per-population-tables escape.** A sub-typed kind whose populations elect
   different surfaces can be declared as per-population tables, each electing
   uniformly — a legal layout a forced single table per kind would structurally
@@ -1161,8 +1188,30 @@ writer semantics, CSV posture, and incremental gating are owned by
 - **Suppressing empty updates.** An audit log records what it tracks: an
   `update` event none of whose audited properties changed carries no
   information and would leak the existence of unaudited changes; lifecycle
-  events (`create` / `destroy`) are information in themselves and emit even
-  with an empty changeset.
+  events are information in themselves — a `create` emits even with an empty
+  changeset, and the deactivation update always carries the soft-delete pair.
+- **End-of-life is an update, not a destroy.** One database tells one
+  lifecycle story. The state render presents soft deletion — deactivated rows
+  persist with `active = false` / `deactivated_at` set — so the log records
+  what the application it imitates actually wrote: an UPDATE to the
+  soft-delete pair. A `destroy` beside a persisting row is two contradictory
+  stories in one export (the audit trail claiming a hard delete the state
+  tables refute), and a completed journey "destroyed" is itself a domain tell
+  — real systems do not destroy flown flights. The ActiveRecord idiom the log
+  matches agrees: under `paranoia` / `discard`-style soft deletion,
+  `paper_trail` records an update version over `deleted_at`; a destroy
+  version marks a real SQL `DELETE`, which the source shape never performs on
+  a record. `destroy` stays for the one thing the shape actually drops — a
+  membership leaving its collection ends the association itself, and the
+  junction's closed interval is interval-grain history *of* that ended
+  association, not a soft-deleted current row, so no second story is told.
+  The changeset carries exactly the pair deactivation writes (payload values
+  survive a soft delete unchanged — nulling them is the hard-delete story
+  again), under the state render's own output names, fixed rather than
+  renameable: one surface, one vocabulary, and a collision with an audited
+  property is loud at plan time. The streaming exporter deliberately keeps
+  `op: d`: CDC-extraction vocabulary is *its* published archetype (§ Things
+  get tables; events get the log), not the app's own audit idiom.
 - **The anchor is required, not defaulted.** An operational dump has no natural
   "no timestamp" representation; silently emitting raw ns integers would be a
   fallback masking a missing anchor as valid output.

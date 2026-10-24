@@ -11,4 +11,5 @@ tables:
         event: create
       - item_type: admission
         item_id: a002
-        event: destroy
+        event: update
+        changes: '{"active":["true","false"],"deactivated_at":[null,"2024-01-03 00:00:00"]}'

@@ -560,7 +560,9 @@ def test_event_log_section_renders_pinned_table_and_column_descriptions(
     )
     assert _column_line(section, "event") == (
         "- `event` (VARCHAR): What happened to the item: 'create', 'update',"
-        " or 'destroy'."
+        " or 'destroy'. A record's deactivation is an 'update' writing the"
+        " soft-delete pair (active, deactivated_at); 'destroy' marks a"
+        " membership leaving its collection."
     )
     assert _column_line(section, "occurred_at") == (
         "- `occurred_at` (TIMESTAMPTZ): When the change took effect. Changes"
@@ -569,7 +571,7 @@ def test_event_log_section_renders_pinned_table_and_column_descriptions(
     assert _column_line(section, "changes") == (
         "- `changes` (JSON): JSON object of the fields this change touched,"
         " each mapped to an [old, new] value pair — old is null on a"
-        " creation, new is null on a deletion."
+        " creation, new is null on a membership leave."
     )
 
     glosses = section[section.index("Declared values:") :]

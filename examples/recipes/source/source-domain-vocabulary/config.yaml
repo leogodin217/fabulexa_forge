@@ -26,7 +26,7 @@
 #
 # Fixture world (recipe emit):
 #   records__admission — a001 active (create only), a002 closed (create
-#     then destroy), one type-1 prop__ward.
+#     then a deactivation update), one type-1 prop__ward.
 #   records__queue / membership__queue__waiters — owner q001; p001 closed
 #     interval (joined@1d, left@2d), p002 open interval (joined@2d).
 #

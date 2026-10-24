@@ -312,7 +312,8 @@ def documented_actor_table_report(
 #: (the resolution module's constants are private to that module).
 EVENT_LOG_TABLE_DESCRIPTION = (
     "The change log: one row per change to an audited item — a creation, an"
-    " update, or a deletion — in event order."
+    " update (a record's deactivation included), or a membership's removal"
+    " — in event order."
 )
 EVENT_LOG_ITEM_TYPE_DESCRIPTION = (
     "The type of the changed item. The values listed below name each audited item type."

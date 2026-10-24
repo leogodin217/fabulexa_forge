@@ -1515,6 +1515,39 @@ def test_rename_value_colliding_with_unrenamed_bare_name_refused(
         )
 
 
+def test_rename_value_colliding_with_deactivation_changeset_key_refused(
+    tmp_path: Path,
+) -> None:
+    """A records source's `changes`-key surface includes the fixed
+    deactivation changeset keys (`active` / `deactivated_at` — doc § The
+    event log): a `rename` value landing on one is refused, resolvable by
+    renaming the property elsewhere."""
+    with pytest.raises(SourceNameCollision, match="changes key collision"):
+        _events_plan(
+            tmp_path,
+            (SourceEventSourceDecl(kind="visit", rename={"status": "active"}),),
+        )
+
+
+def test_membership_field_named_like_deactivation_key_is_legal(
+    tmp_path: Path,
+) -> None:
+    """The deactivation keys join only a RECORDS source's key surface — a
+    membership source emits no deactivation changeset, so its fields may
+    use those names freely."""
+    plan = _events_plan(
+        tmp_path,
+        (
+            SourceEventSourceDecl(
+                membership=MembershipRef(kind="visit", property="team"),
+                rename={"role_name": "active"},
+            ),
+        ),
+    )
+    assert plan.events is not None
+    assert ("role_name", "active") in plan.events.sources[0].audited_properties
+
+
 def test_rename_value_colliding_with_membership_pair_expansion_refused(
     tmp_path: Path,
 ) -> None:

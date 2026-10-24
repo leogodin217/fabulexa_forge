@@ -285,7 +285,7 @@ column, and every referencing column renders its target's election:
 | Reference-valued `prop__<p>` → `<p>` (state render) | verbatim | target's index at the table's horizon | target's `presentation_id` at the table's horizon |
 | Junction owner `<K>_id` | verbatim | owner kind's election, same joins | same |
 | Junction member `<f>_id` | verbatim | per the member row's kind's election (the `<f>_kind` column remains the disambiguator; cross-kind columns carry no uniqueness claim, per the contract's consumer rules) | same |
-| Event-log `item_id` | fold's `record_id` (owner's, for a membership source) | the audited population's election via the identity join — populated on `destroy` rows too (identity is not an after-image) | same |
+| Event-log `item_id` | fold's `record_id` (owner's, for a membership source) | the audited population's election via the identity join — populated on deactivation rows too (identity is not an after-image) | same |
 | Reference-valued entries inside event-log `changes` | verbatim after-image strings | target's index, translated before the diff's lag | target's `presentation_id`, same |
 
 Absorption is the `presentation_id` election's effect alone: under a

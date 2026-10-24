@@ -21,8 +21,12 @@ every audited table's history: one row per create/update/destroy event,
 ordered by `id` (a dense, monotonic position in the log's total order — never
 a value-based rank). Its `changes` column is a JSON object mapping each
 changed property's output name to an `[old, new]` value pair; a `create`
-event's changes carry `[null, value]` for every audited property, a
-`destroy` event's carry `[value, null]`. Replaying the log's rows in `id`
+event's changes carry `[null, value]` for every audited property. A record's
+end-of-life is an `update` writing exactly the soft-delete pair
+(`"active": ["true", "false"]`, `"deactivated_at": [null, <timestamp>]`) —
+the same soft-delete story the state tables tell; `destroy` marks a
+membership leaving its collection, its changes carrying `[value, null]` for
+every selected field. Replaying the log's rows in `id`
 order reconstructs every audited table's history from the log alone — the
 same mechanism a real application's audit trail would give a downstream
 consumer.

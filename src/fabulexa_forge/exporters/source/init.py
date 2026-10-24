@@ -417,7 +417,7 @@ def _write_events_block(
     if not tracked:
         w(
             "  # events:  # this emit's declared history is lifecycle-only"
-            " (create/destroy"
+            " (create/deactivation"
         )
         w(
             "  #          # spine events only) -- no kind carries a tracked"

@@ -35,10 +35,12 @@ tables:
         item_id: a002
         event: create
         changes: '{"department":[null,"south"]}'
+      # a002's deactivation — an update writing the soft-delete pair; the
+      # fixed keys are outside `rename`'s reach
       - item_type: encounter
         item_id: a002
-        event: destroy
-        changes: '{"department":["south",null]}'
+        event: update
+        changes: '{"active":["true","false"],"deactivated_at":[null,"2024-01-03 00:00:00"]}'
       # queue.waiters membership source — item_type labeled "station.waiters",
       # patient_kind changes entries labeled "person"
       - item_type: station.waiters
