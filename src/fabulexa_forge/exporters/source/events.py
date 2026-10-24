@@ -730,8 +730,8 @@ def _build_records_arm_sql(
         )
     )
     deactivated_zone = str(anchor.timezone) if render == "timestamptz" else None
-    deactivated_text = _pinned_temporal_text_sql(
-        deactivated_native, _INSTANT_DENOTED_TYPE[render], deactivated_zone
+    deactivated_text = pinned_temporal_text_sql(
+        deactivated_native, INSTANT_DENOTED_TYPE[render], deactivated_zone
     )
     active_key, deactivated_key = DEACTIVATION_CHANGES_KEYS
     deactivation_expr = build_changes_object_expr(
