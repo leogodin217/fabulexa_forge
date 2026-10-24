@@ -267,6 +267,7 @@ elections ([`value-rendering-elections.md`](value-rendering-elections.md)
 | source | declared table (`state` / `junction`) | unified `render:` map — bare shorthand (structural instant) / `{date_parse: …}` entry (payload) | [`source.md`](source.md) § Wallclock timestamps |
 | source | event log | `render:` map, keyed on the log's one instant column `event_sim_time` — a constant of the log's published contract, not a reader question | [`source.md`](source.md) § The event log |
 | base | per-table render declaration | unified `render:` map keyed on the same pre-default column identities the mode's `rename` uses | [`base.md`](base.md) § Presentation, typing, and ordering |
+| streaming | declared stream | per-stream `render:` map keyed by bare property / element-field names — the payload `{instant: …}` form only, rendered to pinned text at the codec seam | [`value-rendering-elections.md`](value-rendering-elections.md) § Streaming attach |
 
 Which columns are legal `render` keys on a declared table or base entry is
 the reader's answer — an instant-carrying structural column of the table's
@@ -332,7 +333,7 @@ by construction ([`date-dimension.md`](date-dimension.md)).
 
 | Rule | Checks | Error |
 |---|---|---|
-| `TemporalRenderRequiresAnchor` | Every explicitly-elected instant rendering (dimensional `as`, `scd_window` object form, source/base `render` entries — payload `instant` elections included, [`value-rendering-elections.md`](value-rendering-elections.md)) has a resolved effective anchor. The source mode's global anchor requirement subsumes its entries; the rule still names the offending column | `"column '{column}': temporal rendering '{render}' requires a resolved anchor; this emit declares no runtime calendar and none was supplied"` |
+| `TemporalRenderRequiresAnchor` | Every explicitly-elected instant rendering (dimensional `as`, `scd_window` object form, source/base `render` entries, a stream `render` map's `instant` entries — payload `instant` elections included, [`value-rendering-elections.md`](value-rendering-elections.md)) has a resolved effective anchor. The source mode's global anchor requirement subsumes its entries; the rule still names the offending column (streaming's shape names the stream and key) | `"column '{column}': temporal rendering '{render}' requires a resolved anchor; this emit declares no runtime calendar and none was supplied"` |
 | `DateParseSourceColumn` | Each declared parse source resolves per its mode's addressing convention and carries a declared VARCHAR type, and is not `slice_only` | `"date_parse column '{column}' on '{table}': source must be an existing VARCHAR column (got {type})"` |
 | Grain requires an anchor | A `rebase.grain` election resolves to an anchor or refuses: with no origin anywhere (no `base_date`, no sidecar runtime) the anchor resolver raises rather than dropping the election (§ The grain election) | `RebaseOriginUnresolvable`: `"a rebase override was supplied but there is no origin (no base_date and no sidecar anchor)"` |
 | `RenderKeyResolves` | A declared-table or base-entry `render` key resolves in its value form's domain. The bare-shorthand form names an instant-carrying structural column of the table's category (reader-sourced, never hardcoded); the event log's one legal key, `event_sim_time`, is mode-definitional. A key must also name a column the render emits. The typed forms' domains are the value elections' ([`value-rendering-elections.md`](value-rendering-elections.md) § Validation Rules) | `"render key '{column}' on '{table}': not an instant-carrying structural column of this table"` (shorthand form; per-form shapes for the typed forms) |
@@ -402,13 +403,18 @@ byte-identically for the same election.
 
 ## Boundaries
 
-- **Streaming carries no per-column temporal election.** The streaming
-  mode's payloads are string-typed by codec (JSONL / Debezium carry no SQL
-  type surface) and its `ts` rendering is a separate Python-side contract
-  ([`streaming.md`](streaming.md)). The numeric value elections do attach
-  per stream — they change value text only
+- **Streaming carries no structural-column temporal election and no
+  `date_parse`.** The streaming mode's payloads are string-typed by codec
+  (JSONL / Debezium carry no SQL type surface) and its `ts` rendering is a
+  separate Python-side contract ([`streaming.md`](streaming.md)), so the
+  bare structural shorthand has nothing to attach to and `date_parse`
+  re-reads a producer string the wire carries as-is. The elections that do
+  attach per stream are the ones that change value *text* only: the
+  numeric value elections and the payload `instant` declaration, rendered
+  through this family's shared renderer and pinned to the writers'
+  temporal text form at the codec seam
   ([`value-rendering-elections.md`](value-rendering-elections.md)
-  § Streaming attach). The one temporal election that does reach streaming
+  § Streaming attach). The other temporal election that reaches streaming
   is the anchor-borne grain (§ The grain election): `ts` truncates to the
   elected grain because the rendering clock, not a column, carries it.
 - **The parse family covers naive strings only.** There are no zone

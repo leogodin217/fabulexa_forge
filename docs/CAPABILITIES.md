@@ -390,7 +390,8 @@ Each mode reads the same emit and writes a different target shape.
   tables and base render entries (shared with the temporal shorthand and
   `date_parse`, so one column can never carry two elections), as
   `derived: decimal` / `derived: json_precision` on dimensional, and per
-  declared stream on streaming (numeric family only): `decimal` renders a
+  declared stream on streaming (`decimal` / `json_precision` / payload
+  `instant` — the text-only forms): `decimal` renders a
   DOUBLE payload as exact `DECIMAL(p, s)` (ties away from zero, loud
   overflow/NaN error, pinned CSV text form); `instant` declares a payload
   BIGINT a sim-instant and renders it through the temporal vocabulary and the

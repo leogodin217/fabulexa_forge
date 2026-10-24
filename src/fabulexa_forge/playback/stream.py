@@ -206,5 +206,5 @@ def open_stream_playback(
         TemporalClassUnavailableError: Propagated from the eager pass's
             slice_only check (a reader-domain identity, passed through).
     """
-    resolution = resolve_streams(emit, config, notice_sink)
+    resolution = resolve_streams(emit, config, anchor, notice_sink)
     return StreamPlayback(emit, config, anchor, resolution)

@@ -216,7 +216,7 @@ class TestSnapshotFields:
         emit_dir = _build_widget_scenario(tmp_path)
         config = state_changes_config([kind_stream("widgets", "widget", ["status"])])
         with open_emit(emit_dir) as emit:
-            resolution = resolve_streams(emit, config, discard_notice_sink)
+            resolution = resolve_streams(emit, config, None, discard_notice_sink)
             same_instant = list(
                 iter_resolved_stream_events(emit, config, None, resolution, 25, 26)
             )

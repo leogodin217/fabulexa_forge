@@ -414,9 +414,10 @@ class ElectedKeyDuplicate(ExportError):
 
 class TemporalRenderRequiresAnchor(ExportError):
     """An explicitly-elected instant rendering (dimensional `as`, the
-    `scd_window` object form, or a source/base `render` entry) has no
-    resolved effective anchor. An elected rendering never falls back to raw
-    integers — without a declared calendar the offset is uninterpretable."""
+    `scd_window` object form, a source/base `render` entry, or a stream
+    `render` map's `instant` entry) has no resolved effective anchor. An
+    elected rendering never falls back to raw integers — without a declared
+    calendar the offset is uninterpretable."""
 
 
 class DateParseSourceColumn(ExportError):
@@ -447,7 +448,8 @@ class RenderKeyResolves(ExportError):
     (mode-definitional); any other key is refused the same way. A stream's
     `render` key must likewise resolve to a declared property or
     element-schema field of that stream's own projection (`decimal` /
-    `json_precision` only; a membership stream's reference-field pair is
+    `json_precision` / `instant`; the bare shorthand and `date_parse` are
+    unrepresentable there, and a membership stream's reference-field pair is
     outside the domain)."""
 
 
