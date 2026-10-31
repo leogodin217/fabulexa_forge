@@ -69,11 +69,7 @@ def test_datasets_list_text_shipped_catalog_renders_every_entry(
     exit_code = main(["datasets", "list"])
     captured = capsys.readouterr()
     assert exit_code == 0
-    assert (
-        captured.out.index("airline-ops")
-        < captured.out.index("saas-billing")
-        < captured.out.index("nhs")
-    )
+    assert captured.out.index("saas-billing") < captured.out.index("nhs")
     assert captured.err == ""
 
 
@@ -87,7 +83,6 @@ def test_datasets_list_json_shipped_catalog(
     assert exit_code == 0
     document = json.loads(captured.out)
     assert [entry["name"] for entry in document["datasets"]] == [
-        "airline-ops",
         "saas-billing",
         "nhs",
     ]

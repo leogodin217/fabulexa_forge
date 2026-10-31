@@ -4,24 +4,6 @@
 # run `uv run python tools/build_dataset_pack.py <name> --out <dir>` and
 # paste the printed fragment — never hand-type them.
 datasets:
-  - name: airline-ops
-    description: >-
-      A two-base regional airline's operating quarter — flight legs assemble
-      an aircraft, captain and first officer from per-base pools, fly out,
-      turn at the outstation and fly home, while duty shifts, rest days,
-      sickness, paydays and resignations drive crew supply, faults ground
-      tails and a flu wave stresses the fabric; delay beyond the scheduled
-      departure is emergent, never scripted.
-    url: https://github.com/leogodin217/fabulexa_forge/releases/download/datasets-v10/airline-ops.tar.gz
-    sha256: 97e6d345a1bfdb8c779377ded200f24aae50b59e3450332905a64090fb0eaeb6
-    size_bytes: 2606292
-    base_format_version: 13
-    configs: [dimensional.yaml, source.yaml, base.yaml, stream.yaml]
-    commands:
-      - fabulexa-forge export {dir}/bundle {dir}/dimensional.yaml airline-ops-star.duckdb --fmt duckdb
-      - fabulexa-forge export {dir}/bundle {dir}/source.yaml airline-ops-app.duckdb --fmt duckdb
-      - fabulexa-forge export {dir}/bundle {dir}/base.yaml airline-ops-base.duckdb --fmt duckdb
-      - fabulexa-forge stream {dir}/bundle {dir}/stream.yaml --fmt jsonl --sink stdout
   - name: saas-billing
     description: >-
       A B2B SaaS vendor's billing warehouse over five years — accounts on plan
