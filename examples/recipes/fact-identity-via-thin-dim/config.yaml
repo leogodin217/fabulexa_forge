@@ -18,8 +18,8 @@
 #
 # Here: `patient` elects `record_index` (this fixture mints no
 # presentation keys; the rendering rule is identical for a
-# presentation_id election — see docs/examples/airline-ops/
-# dimensional.yaml, whose dim_scheduled_leg exists for exactly this).
+# presentation_id election — see docs/examples/nhs/dimensional.yaml,
+# whose `keys:` block elects actor -> presentation_id).
 # The wait fact is membership grain over the queue's waiters:
 #   - patient_key        fk via membership -> renders the ELECTION (0, 1)
 #   - patient_record_id  plain from: on the member column -> stays raw

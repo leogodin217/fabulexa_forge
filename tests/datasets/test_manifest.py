@@ -45,7 +45,6 @@ def test_load_manifest_returns_populated_catalog() -> None:
     packs rebuilt at the supported version, empty_reason omitted."""
     manifest = load_manifest()
     assert [entry.name for entry in manifest.datasets] == [
-        "airline-ops",
         "saas-billing",
         "nhs",
     ]
@@ -81,7 +80,7 @@ def test_blank_or_multiline_empty_reason_rejected() -> None:
 def test_render_of_shipped_catalog_lists_every_entry() -> None:
     """The shipped catalog's text render names every entry, in authored order."""
     text = render_dataset_listing(load_manifest(), "text")
-    assert text.index("airline-ops") < text.index("saas-billing") < text.index("nhs")
+    assert text.index("saas-billing") < text.index("nhs")
 
 
 def test_text_render_of_empty_manifest_is_no_datasets_line() -> None:
