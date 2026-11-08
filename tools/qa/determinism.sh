@@ -10,6 +10,9 @@
 #
 # Usage:
 #   tools/qa/determinism.sh <example>     # e.g. nhs, retail, ride-sharing
+#   tools/qa/determinism.sh --bundle DIR --config CONFIG.yaml [--label NAME]
+#                                         # one config against one bundle at any
+#                                         # path (run_gates.sh --dataset uses this)
 #
 # Exit code: number of (mode, table) mismatches found (0 = fully deterministic).
 set -uo pipefail
@@ -17,8 +20,35 @@ set -uo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$REPO_ROOT"
 
-EX="${1:?usage: determinism.sh <example>}"
-BUNDLE="docs/examples/${EX}/bundle"
+EX=""
+BUNDLE=""
+ONE_CONFIG=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --bundle) BUNDLE="$2"; shift 2 ;;
+    --config) ONE_CONFIG="$2"; shift 2 ;;
+    --label)  EX="$2"; shift 2 ;;
+    -*) echo "unknown flag: $1" >&2; exit 2 ;;
+    *) EX="$1"; shift ;;
+  esac
+done
+
+if [[ -n "$ONE_CONFIG" || -n "$BUNDLE" ]]; then
+  if [[ -z "$ONE_CONFIG" || -z "$BUNDLE" ]]; then
+    echo "--bundle and --config must be given together" >&2; exit 2
+  fi
+  [[ -n "$EX" ]] || EX="$(basename "$ONE_CONFIG" .yaml)"
+  # (mode label, config path) pairs; the label names the row in the output.
+  CONFIGS=("$(basename "$ONE_CONFIG" .yaml)=${ONE_CONFIG}")
+else
+  [[ -n "$EX" ]] || { echo "usage: determinism.sh <example> | --bundle DIR --config FILE" >&2; exit 2; }
+  BUNDLE="docs/examples/${EX}/bundle"
+  CONFIGS=()
+  for mode in base source dimensional; do
+    cfg="docs/examples/${EX}/${mode}.yaml"
+    [[ -f "$cfg" ]] && CONFIGS+=("${mode}=${cfg}")
+  done
+fi
 if [[ ! -f "${BUNDLE}/base.json" ]]; then
   echo "no bundle for ${EX} at ${BUNDLE}/base.json" >&2
   exit 2
@@ -29,9 +59,9 @@ trap 'rm -rf "$WORK"' EXIT
 
 FAILURES=0
 
-for mode in base source dimensional; do
-  cfg="docs/examples/${EX}/${mode}.yaml"
-  [[ -f "$cfg" ]] || continue
+for pair in "${CONFIGS[@]}"; do
+  mode="${pair%%=*}"
+  cfg="${pair#*=}"
 
   out_a="${WORK}/a-${mode}.duckdb"
   out_b="${WORK}/b-${mode}.duckdb"

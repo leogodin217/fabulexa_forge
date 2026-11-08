@@ -7,6 +7,8 @@ Covers:
 - --tables narrows the comparison
 - --max-row-diffs 0 accepted; listings empty, totals present
 - --format json -> parseable JSON on stdout; --format text is the default
+- --manifests: row-count diff of two companion manifests -> exit 0 on deltas,
+  1 when a table went to zero, 2 on unreadable input; --tables is rejected
 """
 
 from __future__ import annotations
@@ -147,3 +149,93 @@ def test_format_text_is_the_default(
 
     assert exit_code == 0
     assert captured.out.startswith("EQUAL")
+
+
+# --- `--manifests`: the row-count diff mode ---------------------------------
+
+
+def _write_manifest(path: Path, counts: dict[str, int]) -> Path:
+    path.write_text(
+        json.dumps({"tables": [{"name": n, "row_count": c} for n, c in counts.items()]})
+    )
+    return path
+
+
+def test_manifests_no_table_zeroed_exits_zero_with_deltas_on_stdout(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Row-count deltas are informational: a changed count exits 0, the report
+    still lists the delta."""
+    previous = _write_manifest(tmp_path / "prev.json", {"dim_a": 10})
+    fresh = _write_manifest(tmp_path / "fresh.json", {"dim_a": 8})
+
+    exit_code = main(["compare", "--manifests", str(previous), str(fresh)])
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    assert "NO TABLE WENT TO ZERO" in captured.out
+    assert "dim_a: 10 -> 8 (-2) changed" in captured.out
+    assert captured.err == ""
+
+
+def test_manifests_table_went_to_zero_exits_one(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    previous = _write_manifest(tmp_path / "prev.json", {"fact_leg_crew": 40})
+    fresh = _write_manifest(tmp_path / "fresh.json", {"fact_leg_crew": 0})
+
+    exit_code = main(["compare", "--manifests", str(previous), str(fresh)])
+    captured = capsys.readouterr()
+
+    assert exit_code == 1
+    assert captured.out.startswith("ZEROED")
+    assert "fact_leg_crew: 40 -> 0 (-40) zeroed" in captured.out
+
+
+def test_manifests_unreadable_input_exits_two_with_message_on_stderr(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    fresh = _write_manifest(tmp_path / "fresh.json", {"dim_a": 1})
+
+    exit_code = main(
+        ["compare", "--manifests", str(tmp_path / "nope.json"), str(fresh)]
+    )
+    captured = capsys.readouterr()
+
+    assert exit_code == 2
+    assert "ERROR" in captured.err
+    assert captured.out == ""
+
+
+def test_manifests_format_json_is_parseable(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    previous = _write_manifest(tmp_path / "prev.json", {"dim_a": 1})
+    fresh = _write_manifest(tmp_path / "fresh.json", {"dim_a": 1, "dim_b": 2})
+
+    exit_code = main(
+        ["compare", "--manifests", str(previous), str(fresh), "--format", "json"]
+    )
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    parsed = json.loads(captured.out)
+    assert parsed["zeroed"] is False
+    assert [t["status"] for t in parsed["tables"]] == ["unchanged", "appeared"]
+
+
+def test_manifests_rejects_tables_selection(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """`--tables` is a dataset-comparison selection; under `--manifests` it is a
+    usage error (argparse exit 2)."""
+    previous = _write_manifest(tmp_path / "prev.json", {"dim_a": 1})
+    fresh = _write_manifest(tmp_path / "fresh.json", {"dim_a": 1})
+
+    exit_code = main(
+        ["compare", "--manifests", str(previous), str(fresh), "--tables", "dim_a"]
+    )
+    captured = capsys.readouterr()
+
+    assert exit_code == 2
+    assert "--tables does not apply to --manifests" in captured.err

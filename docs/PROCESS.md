@@ -212,3 +212,11 @@ Export config is authored in YAML by non-Python users (CLAUDE.md § Audience). A
 ## Verifying Features
 
 A feature is verified when its behavior is exercised by the conformance suite and the test suite, and `make check` is green (lint + typecheck + conformance + tests). Determinism, faithful reshaping, and version-gating are the invariants worth a dedicated test (CLAUDE.md § Key Invariants).
+
+---
+
+## Dataset QA round
+
+A published dataset is judged in the fleet's **dataset QA round**, invoked from the ecosystem repo's `/dataset-qa` skill — two lenses: **mechanism QA** (intent-aware: does the export faithfully reshape what the bundle declares) and **realism QA** (intent-blind reviewers reading the output cold). Forge owns the export half of mechanism QA and is driven only through three stable entry points: `tools/qa/run_gates.sh` (the five mechanical gates — scd2, refs, trace, zero-row, determinism — on an example or, with `--dataset/--config/--bundle`, on a staged pack at any path), `fabulexa-forge export`, and `fabulexa-forge compare` (dataset equality, or `--manifests` for the per-table row-count diff of a fresh render against the previously published one). Nothing else in the repo is a round-facing surface.
+
+Forge triages every finding into one of four buckets: **config error** (fix the export config), **forge gap** (a reshape the grammar cannot express or a defect in the engine — a sprint), **inherited from emit** (the bundle itself carries it — handed to composite through the round, never patched here), or **faithful-and-dropped** (a true reshape of something not worth keeping — closed with a note). The expected-empty allowlist a gate consults lives beside the example's configs (`docs/examples/<example>/expected-empty.yaml`; see `tools/qa/zero_rows.py`); the row-count diff lives in the compare surface ([`architecture/compare.md`](architecture/compare.md) § The manifest row-count diff). The fleet vocabulary above is the round's; forge's own earlier tier A / tier B record stays as written in [`qa/data_qa-round.md`](qa/data_qa-round.md).

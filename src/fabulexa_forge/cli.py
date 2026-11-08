@@ -16,6 +16,8 @@ Usage:
     fabulexa-forge corrupt <emit_dir> --config <corrupt.yaml> --out <out_dir>
     fabulexa-forge compare <expected> <actual> [--tables NAME [NAME ...]]
         [--max-row-diffs <n>] [--format text|json]
+    fabulexa-forge compare --manifests <previous-manifest.json> <fresh-manifest.json>
+        [--format text|json]
     fabulexa-forge datasets list [--format text|json]
     fabulexa-forge datasets get <name> [--dir <dir>] [--force]
 
@@ -25,7 +27,9 @@ Exit codes:
     3  — drained (--next found no more windows to emit)
 
 `compare` is a self-contained verdict surface with its own exit-code
-contract (0 equal · 1 not equal · 2 input error) — see `_cmd_compare`.
+contract (0 equal · 1 not equal · 2 input error) — see `_cmd_compare`. Under
+`--manifests` the verdict is "no table went to zero" (0) vs "a table went to
+zero" (1); row-count deltas are reported, not judged.
 """
 
 from __future__ import annotations
@@ -1207,8 +1211,49 @@ def cmd_compare(
     return 0 if result.equal else 1
 
 
+def cmd_compare_manifests(previous: Path, fresh: Path, fmt: str) -> int:
+    """`fabulexa-forge compare --manifests` — per-table row-count diff between
+    two companion manifests.
+
+    Runs `diff_manifest_row_counts` and prints the rendered report to stdout.
+    Deltas, appearances and disappearances are reported for a human to judge;
+    only a table going to zero (rows in `previous`, none in `fresh`) fails.
+
+    Args:
+        previous: The previously published render's `<prefix>-manifest.json`.
+        fresh: The fresh render's `<prefix>-manifest.json`.
+        fmt: 'text' or 'json'.
+
+    Returns:
+        0 when no table went to zero; 1 when one did (report still printed);
+        2 on a CompareInputError (message on stderr, no report).
+    """
+    from fabulexa_forge.compare import (
+        CompareInputError,
+        diff_manifest_row_counts,
+        render_row_count_diff_json,
+        render_row_count_diff_text,
+    )
+
+    try:
+        diff = diff_manifest_row_counts(previous, fresh)
+    except CompareInputError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 2
+
+    if fmt == "json":
+        print(render_row_count_diff_json(diff))
+    else:
+        print(render_row_count_diff_text(diff))
+    return 1 if diff.zeroed else 0
+
+
 def _cmd_compare(args: list[str]) -> int:
     """Dispatch the compare subcommand.
+
+    Two positionals either way: datasets (`expected actual`) by default, or
+    companion manifests (`previous fresh`) under `--manifests`, which rejects
+    the dataset-only `--tables` selection.
 
     Args:
         args: Remaining arguments after the 'compare' verb.
@@ -1220,15 +1265,30 @@ def _cmd_compare(args: list[str]) -> int:
 
     parser = argparse.ArgumentParser(
         prog="fabulexa-forge compare",
-        description="Compare two materialized datasets for exact equality.",
+        description=(
+            "Compare two materialized datasets for exact equality, or with"
+            " --manifests diff per-table row counts between two companion"
+            " manifests (previous, fresh)."
+        ),
     )
-    parser.add_argument("expected", type=Path)
-    parser.add_argument("actual", type=Path)
+    parser.add_argument("expected", type=Path, help="dataset, or previous manifest")
+    parser.add_argument("actual", type=Path, help="dataset, or fresh manifest")
+    parser.add_argument(
+        "--manifests",
+        action="store_true",
+        help="treat the two positionals as <prefix>-manifest.json files and diff"
+        " their per-table row counts (exit 1 only when a table went to zero)",
+    )
     parser.add_argument("--tables", nargs="+", default=None)
     parser.add_argument("--max-row-diffs", dest="max_row_diffs", type=int, default=10)
     parser.add_argument("--format", choices=("text", "json"), default="text")
 
     parsed = parser.parse_args(args)
+
+    if parsed.manifests:
+        if parsed.tables is not None:
+            parser.error("--tables does not apply to --manifests")
+        return cmd_compare_manifests(parsed.expected, parsed.actual, parsed.format)
 
     return cmd_compare(
         parsed.expected,
@@ -1401,7 +1461,7 @@ VERBS: Final[tuple[Verb, ...]] = (
     Verb("corrupt", "Apply a corrupter config to an emit.", _cmd_corrupt),
     Verb(
         "compare",
-        "Compare two materialized datasets for exact equality.",
+        "Compare two datasets for exact equality, or two manifests' row counts.",
         _cmd_compare,
     ),
     Verb(
