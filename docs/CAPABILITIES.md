@@ -636,6 +636,12 @@ it breaks. See [`architecture/corrupters.md`](architecture/corrupters.md).
   byte-stable JSON report renderers. The deterministic-grading consumer's verdict
   surface and the shared engine for internal agreement checks. See
   [`architecture/compare.md`](architecture/compare.md).
+- ✓ **Manifest row-count diff** — `diff_manifest_row_counts()` + `fabulexa-forge
+  compare --manifests`: per-table row-count deltas (unchanged / changed / appeared /
+  disappeared / zeroed) between a fresh render's companion manifest and the
+  previously published one. Deltas are informational; a table going to zero is the
+  one failure. The fleet dataset QA round's first look at a re-export. See
+  [`architecture/compare.md`](architecture/compare.md) § The manifest row-count diff.
 
 ## Dataset distribution
 
@@ -683,8 +689,10 @@ it breaks. See [`architecture/corrupters.md`](architecture/corrupters.md).
 - ✓ `fabulexa-forge compare` — `fabulexa-forge compare EXPECTED ACTUAL [--tables ...]
   [--max-row-diffs N] [--format text|json]`: exact-equality verdict + discrepancy
   report on two materialized datasets; exit codes `0` equal · `1` not equal ·
-  `2` input error (its own contract, distinct from the other verbs' `0/1/3`). See
-  [`architecture/compare.md`](architecture/compare.md).
+  `2` input error (its own contract, distinct from the other verbs' `0/1/3`).
+  `compare --manifests PREVIOUS FRESH [--format text|json]` diffs two companion
+  manifests' row counts instead: `0` no table went to zero · `1` one did · `2`
+  input error. See [`architecture/compare.md`](architecture/compare.md).
 - ✓ `fabulexa-forge datasets` — the first verb with sub-verbs: `datasets list
   [--format text|json]` (offline catalog of published example datasets) and
   `datasets get <name> [--dir DIR] [--force]` (download, verify, extract a

@@ -91,7 +91,7 @@ directory holding `run.duckdb` + `base.json` — except `compare` and `datasets`
 | `stream`   | Replay the base layer as a CDC event stream to stdout, files, or Kafka. |
 | `mixer`    | Replay the base layer as a live, operator-mixable Kafka feed with a control API. |
 | `corrupt`  | Inject realistic data-quality defects, with a ground-truth `defects.json` manifest. |
-| `compare`  | Compare two materialized datasets for exact equality. |
+| `compare`  | Compare two materialized datasets for exact equality, or two companion manifests' row counts. |
 | `datasets` | List or download the published example dataset packs. |
 
 Example — validate an emit, then export it to a DuckDB star schema:
@@ -226,6 +226,15 @@ file or a directory of CSVs.
 | `--tables NAME ...` | Compare only these tables. Default: every table in `expected`. |
 | `--max-row-diffs N` | Cap on differing rows reported per table. Default `10`. |
 | `--format text\|json` | Report rendering. Default `text`. |
+
+```bash
+fabulexa-forge compare --manifests <previous-manifest.json> <fresh-manifest.json> [--format text|json]
+```
+
+With `--manifests` the two positionals are companion manifests (`<prefix>-manifest.json`,
+written beside every export) and the report is the per-table row-count delta between
+them — unchanged, changed, appeared, disappeared, or zeroed. Deltas are informational;
+exit `1` only when a table that had rows now has none.
 
 ### `datasets`
 

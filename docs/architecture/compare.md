@@ -25,6 +25,8 @@ tests in [`tests/compare/`](../../tests/compare/), CLI verb in
   DuckDB file, authoritative) and an *actual* side (a DuckDB file or a
   directory of CSV files, claiming to be the same reshape) — plus an optional
   `tables` narrowing and a `max_row_diffs` listing cap.
+  A second mode takes two companion manifests instead (§ The manifest
+  row-count diff).
 - **Out:** a frozen [`ComparisonResult`](../../src/fabulexa_forge/compare/report.py)
   (the verdict and report), renderable as deterministic text or byte-stable
   JSON ([`render.py`](../../src/fabulexa_forge/compare/render.py)); malformed
@@ -275,6 +277,28 @@ encoding) is what discharges that claim on the timestamptz path. This is the
 surface's own instance of the package-wide determinism invariant, and it is
 what lets a grader treat the report as a stable artifact.
 
+### The manifest row-count diff
+
+`diff_manifest_row_counts(previous, fresh)` is the surface's second mode,
+reached as `fabulexa-forge compare --manifests PREVIOUS FRESH`. Its two inputs
+are companion manifests (`<prefix>-manifest.json`,
+[`companion-artifacts.md`](companion-artifacts.md) § The manifest) — the
+previously published render's and a fresh render's — and it reads exactly two
+fields of each, `tables[].name` and `tables[].row_count`. Per table in the
+union of both manifests' names, ordered by name, it reports one
+[`RowCountDelta`](../../src/fabulexa_forge/compare/manifests.py): `unchanged`,
+`changed` (with the signed delta), `appeared`, `disappeared`, or `zeroed` (rows
+before, none now).
+
+The verdict is narrower than the dataset mode's: `RowCountDiff.zeroed` is true
+iff some table went to zero, and that alone is the failure. Every other
+movement is information for a human to judge — a re-emitted bundle legitimately
+moves every count, and the diff exists so the round sees *where* before anyone
+opens the data. A table that first appears empty is `appeared`, not `zeroed`;
+the zero-row gate (`tools/qa/zero_rows.py`) owns that case against the
+expected-empty allowlist. Determinism holds as in the dataset mode: same two
+manifests, byte-identical report.
+
 ### The CLI verb
 
 ```
@@ -282,13 +306,19 @@ fabulexa-forge compare EXPECTED ACTUAL
     [--tables NAME [NAME ...]]
     [--max-row-diffs N]
     [--format text|json]      # default text
+
+fabulexa-forge compare --manifests PREVIOUS FRESH
+    [--format text|json]      # default text; --tables is rejected
 ```
 
 Exit codes: `0` equal · `1` not equal · `2` input error — compare's own
 exit-code contract, distinct from every other verb's `0/1/3`, because the
-verdict itself is the boolean a scripting consumer branches on. The report
+verdict itself is the boolean a scripting consumer branches on. Under
+`--manifests` the boolean is "no table went to zero": `0` when none did,
+`1` when one did, `2` on an unreadable manifest. The report
 goes to stdout; input errors go to stderr. The report shapes are the frozen
-dataclasses in [`report.py`](../../src/fabulexa_forge/compare/report.py); the
+dataclasses in [`report.py`](../../src/fabulexa_forge/compare/report.py) and
+[`manifests.py`](../../src/fabulexa_forge/compare/manifests.py); the
 JSON rendering is a byte-stable mirror of that shape (sorted keys, fixed
 separators) — the grading consumer's wire format.
 

@@ -340,6 +340,28 @@ names.
    Fix and re-run from step 4. The config is done when it exits 0 **and** this profile
    holds no surprises you cannot justify from the atlas.
 
+6. **First publication only — the intent-aware export audit.** A dataset being
+   published for the first time has no prior render, so `fabulexa-forge compare` has
+   nothing to hold it against and the fleet QA round's row-count diff is blind. You
+   are the prior render. With the ATLAS and `base.json` open beside the config, check
+   each table once against the bundle's *intent*, not its data:
+
+   - **Grain** — every fact's row is the unit the atlas names (one leg, one visit, one
+     invoice line), and every dim's row is one entity, not one version of one.
+   - **Dimensions and keys** — each `dim_*` corresponds to a kind or sub-type the
+     atlas describes, keyed on the surface `declare_keys` / `keys:` elects; every
+     fact FK points at that key by the same name.
+   - **README prose** — the `readme_overlay`, if any, describes what the config
+     builds, not what a sibling config built.
+   - **Expected-empty tables** — any table you *expect* to export empty (a declared
+     sub-type with no live rows, a journey that never fires in this horizon) goes in
+     `docs/examples/<example>/expected-empty.yaml` under its mode with the reason;
+     the zero-row gate (`tools/qa/zero_rows.py`) fails every other empty table.
+
+   Run `tools/qa/run_gates.sh <example>` and ship when the matrix is clean. Later
+   publications get this check for free from `compare`; the first one gets it from
+   you.
+
 ## Decision rules
 
 The four calls where a legal config goes wrong. All four are settled by step 1's
